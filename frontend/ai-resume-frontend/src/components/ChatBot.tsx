@@ -4,13 +4,11 @@ import type { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Menu, Send, X, MessageCircle } from "lucide-react";
 
-const env = (import.meta as any).env || {};
 // In production the chat endpoint is served by the same Hugging Face Space.
-// Keep VITE_API_URL for local development, but never bake a localhost URL into
-// the deployed bundle.
-const API_BASE: string = env.PROD
+// Keep VITE_API_URL for local development without baking it into the bundle.
+const API_BASE: string = import.meta.env.PROD
   ? ""
-  : env.VITE_API_URL || "https://anish321-ats-resume-analyzer.hf.space";
+  : import.meta.env.VITE_API_URL || "https://anish321-ats-resume-analyzer.hf.space";
 
 type Action = { label: string; to: string };
 type Msg = {
