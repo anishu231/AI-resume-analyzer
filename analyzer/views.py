@@ -5,21 +5,30 @@
 # This file contains all Django REST Framework API endpoints for the 
 # AI-powered resume screening system.
 # ============================================================================
+from .utils import extract_text_from_file, extract_skills
+from .resume_review import review_resume
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from django.utils import timezone
+from django.core.files.storage import default_storage
+
+from analyzer.models import Candidate
+
+from .serializers import RegisterSerializer
+
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
-from django.core.files.storage import default_storage
-from django.conf import settings
-from django.utils import timezone
+from .models import Candidate, MatchScore
 from django.db.models import Avg
-from django.db.models import Q
-import os, re, traceback
-from .models import Candidate, JobDescription, MatchScore, MLAnalysis
-from .utils import extract_text_from_file, extract_skills, calculate_weighted_score, nlp
-from django.apps import apps
+import re
 
+import os
+import traceback
 # ============================================================================
 # ML PREDICTOR INITIALIZATION (Run once at server startup)
 # ============================================================================
@@ -39,10 +48,10 @@ except Exception as e:
 # ============================================================================
 # HELPER FUNCTION: Keyword Extractor
 # ============================================================================
-
-def extract_keywords(text, max_keywords=30):
+def extract_keywords(text, max_keywords=None):
     """
-    Extract meaningful keywords from text for resume-JD matching.
+    Extract ALL meaningful keywords from text (no frequency cap).
+    Used to build the full vocabulary set for matching.
     """
     words = re.findall(r'\b[A-Za-z]{3,20}\b', text.lower())
     
@@ -59,8 +68,24 @@ def extract_keywords(text, max_keywords=30):
     
     filtered = [w for w in words if w not in stopwords]
     
+    if max_keywords:
+        from collections import Counter
+        return [word for word, _ in Counter(filtered).most_common(max_keywords)]
+
+    return filtered
+
+
+def get_top_keywords(text, max_keywords=30):
+    """Get top-N most frequent keywords — used for JD's 'important terms' list."""
+    return extract_keywords(text, max_keywords=max_keywords)
+
+    # from collections import Counter
+    # return [word for word, _ in Counter(filtered).most_common(max_keywords)]
+def get_top_keywords(text, max_keywords=30):
+    """Get top-N frequent keywords (for display purposes only, e.g. missing_keywords)"""
+    words = extract_keywords(text)
     from collections import Counter
-    return [word for word, _ in Counter(filtered).most_common(max_keywords)]
+    return [word for word, _ in Counter(words).most_common(max_keywords)]
 
 
 # ============================================================================
@@ -70,41 +95,111 @@ def extract_keywords(text, max_keywords=30):
 # Purpose: Accept MULTIPLE resumes + JD (text OR file) + session_id
 # Returns: { "results": [ {filename, success, score, ...}, ... ] }
 # ============================================================================
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def register_user(request):
 
+    serializer = RegisterSerializer(data=request.data)
+
+    if serializer.is_valid():
+        serializer.save()
+
+        return Response({
+            "message": "User created successfully"
+        })
+
+    return Response(serializer.errors, status=400)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def login_user(request):
+
+    username = request.data.get("username")
+    password = request.data.get("password")
+
+    user = authenticate(
+        username=username,
+        password=password
+    )
+
+    if not user:
+        return Response(
+            {"error": "Invalid credentials"},
+            status=401
+        )
+
+    refresh = RefreshToken.for_user(user)
+
+    return Response({
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+        "username": user.username,
+        "email": user.email,      # <-- ye line add karein
+    })
+
+
+
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
+# def delete_session(request, session_id):
+
+#     print("DELETE SESSION ID =", session_id)
+
+#     all_sessions = Candidate.objects.values_list(
+#         "session_id",
+#         flat=True
+#     ).distinct()
+
+#     print("ALL SESSIONS =", list(all_sessions))
+
+#     candidates = Candidate.objects.filter(
+#         session_id=session_id,
+#         user=request.user
+#     )
+
+#     print("FOUND =", candidates.count())
+
+#     if not candidates.exists():
+#         return Response(
+#             {"error": "Session not found"},
+#             status=404
+#         )
+
+#     candidates.delete()
+
+#     return Response({
+#         "message": "Session deleted successfully"
+#     })
 
 @api_view(['DELETE'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def delete_session(request, session_id):
-
     print("DELETE SESSION ID =", session_id)
 
-    all_sessions = Candidate.objects.values_list(
-        "session_id",
-        flat=True
-    ).distinct()
+    # Pehle user-owned candidates try karo
+    candidates = Candidate.objects.filter(session_id=session_id, user=request.user)
 
-    print("ALL SESSIONS =", list(all_sessions))
-
-    candidates = Candidate.objects.filter(
-        session_id=session_id
-    )
+    # Agar nahi mile, to bina user filter ke try karo (legacy/null-user records ke liye)
+    if not candidates.exists():
+        candidates = Candidate.objects.filter(session_id=session_id)
 
     print("FOUND =", candidates.count())
 
     if not candidates.exists():
-        return Response(
-            {"error": "Session not found"},
-            status=404
-        )
+        return Response({"error": "Session not found"}, status=404)
 
+    deleted_count = candidates.count()
     candidates.delete()
 
     return Response({
-        "message": "Session deleted successfully"
+        "message": "Session deleted successfully",
+        "deleted_count": deleted_count,
+        "session_id": session_id
     })
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def upload_resume(request):
     """
     Handle batch resume upload with flexible JD input.
@@ -144,11 +239,18 @@ def upload_resume(request):
     job_description_text = request.data.get('job_description', '').strip()  # ✅ Text JD
     jd_file = request.FILES.get('jd_file')  # ✅ File JD (optional)
     session_id = request.data.get('session_id', f"session_{timezone.now().timestamp()}")
+    experience_level = request.data.get('experience_level', 'entry').strip().lower()
     
     # === VALIDATION ===
     if not resumes:
         print("[ERROR] No resume files uploaded")
         return Response({"error": "No resume files uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if experience_level not in {'entry', 'experienced'}:
+        return Response(
+            {"error": "experience_level must be 'entry' or 'experienced'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     
     if not job_description_text and not jd_file:
         print("[ERROR] Missing job description (neither text nor file provided)")
@@ -224,77 +326,51 @@ def upload_resume(request):
             
             print(f"[INFO] Extracted text length: {len(resume_text)}")
             
-            # Extract skills and keywords
             resume_skills = extract_skills(resume_text)
             job_skills = extract_skills(job_description_text)
-            resume_keywords = extract_keywords(resume_text)
-            job_keywords = extract_keywords(job_description_text)
-            
-            # Calculate keyword overlap
-            matched_keywords = list(set(resume_keywords) & set(job_keywords))
-            missing_keywords = list(set(job_keywords) - set(resume_keywords))
-            
-            print(f"[INFO] Matched {len(matched_keywords)} keywords, missing {len(missing_keywords)}")
-            
-            # Traditional scoring
-            resume_doc = nlp(resume_text)
-            job_doc = nlp(job_description_text)
-            base_result = calculate_weighted_score(
-                resume_text, job_description_text,
-                resume_skills, job_skills,
-                resume_doc, job_doc
+            analysis_report = review_resume(
+                resume_text,
+                job_description_text,
+                experience_level=experience_level,
+                resume_skills=resume_skills,
+                job_skills=job_skills,
             )
-            
-            keyword_match_rate = len(matched_keywords) / max(len(job_keywords), 1)
-            skill_match_rate = len(set(resume_skills) & set(job_skills)) / max(len(job_skills), 1)
-            
-            # ML scoring (if available)
-            if ml_predictor:
-                try:
-                    ml_result = ml_predictor.predict(resume_text, job_description_text)
-                    ml_score = ml_result['score']
-                    final_score = round(ml_score * 0.85 + base_result['score'] * 0.15, 1)
-                    print(f"[INFO] ML Score: {ml_score}, Final (blended): {final_score}")
-                except Exception as ml_error:
-                    print(f"⚠️ ML prediction failed for {resume.name}: {ml_error}")
-                    final_score = base_result['score']
-            else:
-                final_score = base_result['score']
-            
-            # Section scores for UI
-            section_scores = {
-                "skills": min(100, round(skill_match_rate * 100 + 5)),
-                "experience": min(100, round(final_score * 0.9)),
-                "education": min(100, round(final_score * 0.85 + 10)),
-                "keywords": min(100, round(keyword_match_rate * 100))
-            }
-            
-            # Recommendations
-            recommendations = []
-            if missing_keywords:
-                recommendations.append(f"Add missing keywords: {', '.join(missing_keywords[:3])}")
-            if final_score < 70:
-                recommendations.append("Quantify achievements with metrics (e.g., 'Increased X by 40%')")
-            if len(resume_skills) < len(job_skills) * 0.7:
-                recommendations.append("Highlight more technical skills from the job description")
-            recommendations.append("Use standard section headings: Experience, Skills, Education")
+            final_score = analysis_report["score"]
+            matched_keywords = analysis_report["matched_skills"]
+            missing_keywords = analysis_report["missing_skills"]
+            recommendations = analysis_report["recommendations"]
+            section_scores = analysis_report["component_scores"]
             
             # Save candidate to database WITH session_id
             candidate_name = resume.name.rsplit('.', 1)[0]
             candidate = Candidate.objects.create(
-                name=candidate_name,
-                resume_file=file_path,
-                extracted_text=resume_text[:5000],
-                extracted_skills=resume_skills,
-                session_id=session_id  # ✅ Store session for grouping
-            )
+            user=request.user,
+            name=candidate_name,
+            resume_file=file_path,
+            extracted_text=resume_text[:5000],
+            extracted_skills=resume_skills,
+            session_id=session_id
+)
             
             # Save match score
             MatchScore.objects.create(
                 candidate=candidate,
                 score=final_score/100,
+                semantic_similarity=section_scores.get('job_relevance', 0) / 100,
+                skill_match_score=section_scores.get('role_skills', 0) / 100,
+                experience_score=section_scores.get(
+                    'experience_and_scope', section_scores.get('projects_and_education', 0)
+                ) / 100,
                 missing_skills=missing_keywords,
-                matched_skills=matched_keywords
+                matched_skills=matched_keywords,
+                strengths=analysis_report['strengths'],
+                weaknesses=[
+                    item['issues'][0]
+                    for item in analysis_report['bullet_feedback']
+                    if item.get('issues')
+                ],
+                recommendations=recommendations,
+                analysis_report=analysis_report,
             )
             
             # Build success result
@@ -304,10 +380,12 @@ def upload_resume(request):
                 "score": final_score,
                 "matched_keywords": matched_keywords[:15],
                 "missing_keywords": missing_keywords[:15],
+                "match_report": analysis_report,
+                "experience_level": experience_level,
                 "section_scores": section_scores,
-                "recommendations": recommendations[:4],
+                "recommendations": recommendations[:8],
                 "resume_url": f"http://127.0.0.1:8000/media/{file_path}",
-                "scoring_method": "ml_hybrid" if ml_predictor else "traditional"
+                "scoring_method": "explainable_text_fit_v2"
             })
             
             print(f"[SUCCESS] {resume.name} - Score: {final_score}")
@@ -343,13 +421,13 @@ def upload_resume(request):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def list_candidates(request):
     """
     Return all candidates in database with their match scores (legacy endpoint).
     """
     try:
-        candidates = Candidate.objects.all().order_by('-id')
+        candidates = Candidate.objects.filter(user=request.user).order_by('-id')
         results = []
         
         for c in candidates:
@@ -391,14 +469,14 @@ def list_candidates(request):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def dashboard_data(request):
     """
     Return all candidates with optional minimum score filtering.
     """
     min_score = float(request.query_params.get('min_score', 0))
     
-    all_candidates = Candidate.objects.all().order_by('-created_at')
+    all_candidates = Candidate.objects.filter(user=request.user).order_by('-created_at')
     
     candidates_list = []
     for cand in all_candidates:
@@ -415,6 +493,7 @@ def dashboard_data(request):
                 "skills_count": len(cand.extracted_skills or []),
                 "analyzed_at": cand.created_at.isoformat() if cand.created_at else None,
                 "matched_keywords": (match_score.matched_skills if match_score else [])[:10],
+                "match_report": (match_score.analysis_report or None) if match_score else None,
                 "session_id": getattr(cand, 'session_id', None)
             })
     
@@ -451,7 +530,7 @@ def dashboard_data(request):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def dashboard_latest(request):
     """
     Return candidates uploaded in the last 10 minutes (latest user session).
@@ -520,12 +599,12 @@ def dashboard_latest(request):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def dashboard_by_session(request, session_id):
     """
     Return all candidates for a specific session.
     """
-    candidates = Candidate.objects.filter(session_id=session_id).order_by('-created_at')
+    candidates = Candidate.objects.filter(session_id=session_id,user=request.user).order_by('-created_at')
     
     if not candidates:
         return Response({
@@ -573,18 +652,19 @@ def dashboard_by_session(request, session_id):
 # ============================================================================
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def dashboard_history(request):
     """
     Return all candidates ever uploaded, with pagination and filtering.
     """
+
     try:
         page = int(request.query_params.get('page', 1))
         page_size = 20
         search = request.query_params.get('search', '').lower()
         min_score = float(request.query_params.get('min_score', 0))
         
-        candidates = Candidate.objects.all().order_by('-created_at')
+        candidates = Candidate.objects.filter(user=request.user).order_by('-created_at')
         
         if search:
             candidates = candidates.filter(name__icontains=search)

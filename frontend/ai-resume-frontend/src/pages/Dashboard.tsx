@@ -29,6 +29,7 @@ import {
   Check,
 } from "lucide-react";
 import type { Candidate } from "../types";
+import ResumeFeedback from "../components/ResumeFeedback";
 
 const API = "https://anish321-ats-resume-analyzer.hf.space/api";
 const LEGACY = "legacy"; // candidates saved without a session id
@@ -490,6 +491,15 @@ export default function Dashboard() {
                       <p className="text-xs text-gray-400">No matched keywords recorded</p>
                     )}
                   </div>
+
+                  {c.match_report && (
+                    <details className="mt-4 border-t border-gray-100 pt-3">
+                      <summary className="cursor-pointer text-sm font-semibold text-green-700 hover:text-green-900">
+                        View detailed feedback
+                      </summary>
+                      <ResumeFeedback report={c.match_report} />
+                    </details>
+                  )}
 
                   <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500">
                     <span>{c.skills_count != null ? `${c.skills_count} skills found` : "Skills n/a"}</span>

@@ -89,6 +89,7 @@ class MatchScore(models.Model):
     strengths = models.JSONField(default=list)
     weaknesses = models.JSONField(default=list)
     recommendations = models.JSONField(default=list)
+    analysis_report = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:

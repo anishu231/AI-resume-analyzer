@@ -18,6 +18,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import type { Candidate } from "../types";
+import ResumeFeedback from "../components/ResumeFeedback";
 
 const MAX_FILES = 10;
 const isResume = (f: File) => f.type === "application/pdf" || /\.(pdf|docx)$/i.test(f.name);
@@ -38,6 +39,7 @@ export default function UploadPage() {
   const navigate = useNavigate();
   const [files, setFiles] = useState<File[]>([]);
   const [jobDescription, setJobDescription] = useState("");
+  const [experienceLevel, setExperienceLevel] = useState<"entry" | "experienced">("entry");
   const [jdFile, setJdFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState<{
@@ -155,6 +157,7 @@ export default function UploadPage() {
 
     const formData = new FormData();
     formData.append("session_id", sessionId);
+    formData.append("experience_level", experienceLevel);
     if (jobDescription.trim()) formData.append("job_description", jobDescription);
     if (jdFile) formData.append("jd_file", jdFile);
     files.forEach((file) => formData.append("resumes", file));
@@ -244,7 +247,7 @@ export default function UploadPage() {
         <div className="relative mx-auto max-w-5xl text-center">
           <h1 className="text-3xl font-extrabold sm:text-4xl">Analyse resumes against a job</h1>
           <p className="mx-auto mt-2 max-w-xl text-green-50">
-            Add the job description, upload up to {MAX_FILES} resumes, and get a score for each one.
+            Choose the target career level, add its job description, and get an explainable fit estimate with specific edits.
           </p>
 
           {/* Steps */}
@@ -280,6 +283,25 @@ export default function UploadPage() {
               1. Job description <span className="text-sm font-medium text-red-500">required</span>
             </h2>
             <p className="mb-4 text-sm text-gray-500">Paste the text, or upload it as a file.</p>
+
+            <div className="mb-5 rounded-2xl border border-green-100 bg-green-50/70 p-4">
+              <label htmlFor="experience-level" className="mb-1 block text-sm font-semibold text-gray-800">
+                Target experience level
+              </label>
+              <select
+                id="experience-level"
+                value={experienceLevel}
+                onChange={(e) => setExperienceLevel(e.target.value as "entry" | "experienced")}
+                disabled={uploading}
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-green-600 focus:outline-none focus:ring-4 focus:ring-green-100 sm:max-w-sm"
+              >
+                <option value="entry">Entry-level / fresher (0–2 years)</option>
+                <option value="experienced">Experienced professional (3+ years)</option>
+              </select>
+              <p className="mt-2 text-xs text-gray-600">
+                This changes how project/education evidence or professional scope is weighted. Paste the matching job description below.
+              </p>
+            </div>
 
             {/* Option A: paste text */}
             <label htmlFor="jd-text" className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
@@ -616,27 +638,30 @@ export default function UploadPage() {
                   <CheckCircle size={18} className="text-green-600" />
                   {results.success.length} resume{results.success.length > 1 ? "s" : ""} analysed
                 </p>
-                <ul className="grid gap-3 sm:grid-cols-2">
+                <ul className="grid gap-4 sm:grid-cols-2">
                   {results.success.map((c, i) => {
                     const score = Math.round(Number(c.score) || 0);
                     const meta = scoreMeta(score);
                     return (
                       <li
                         key={`${c.name}-${i}`}
-                        className="flex items-center justify-between gap-3 rounded-2xl border border-gray-200 p-4"
+                        className="rounded-2xl border border-gray-200 p-4"
                       >
-                        <div className="flex min-w-0 items-center gap-3">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600">
-                            <FileText size={18} />
-                          </span>
-                          <p className="truncate text-sm font-medium text-gray-800">{c.name}</p>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600">
+                              <FileText size={18} />
+                            </span>
+                            <p className="truncate text-sm font-medium text-gray-800">{c.name}</p>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <span className="text-xl font-bold text-gray-900">{score}%</span>
+                            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${meta.cls}`}>
+                              {meta.label}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          <span className="text-xl font-bold text-gray-900">{score}%</span>
-                          <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${meta.cls}`}>
-                            {meta.label}
-                          </span>
-                        </div>
+                        <ResumeFeedback report={c.match_report} />
                       </li>
                     );
                   })}
