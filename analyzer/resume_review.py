@@ -145,7 +145,9 @@ def _bullet_feedback(lines):
         if first_word in repeated_openers and first_word in ACTION_VERBS:
             issues.append(f"Several bullets start with '{first_word}'; vary the opening verbs where accurate.")
         if not _has_quantified_impact(line):
-            issues.append("This line does not show measurable scope or impact.")
+            impact_note = _impact_note(line)
+            if impact_note:
+                issues.append(impact_note)
         if len(words) > 32:
             issues.append("This line is long; keep its main action and most relevant detail.")
         if issues:
@@ -167,17 +169,17 @@ def _bullet_feedback(lines):
     return feedback
 
 
-def _impact_hint(line):
+def _impact_note(line):
     lowered = line.lower()
     if re.search(r"dashboard|report|visuali[sz]|power bi|tableau|kpi", lowered):
-        return "the KPIs or reports supported, users served, or reporting time saved"
+        return "To add context, name the KPIs tracked or the reporting decisions these dashboards supported, if accurate."
     if re.search(r"analys|insight|research|forecast|model", lowered):
-        return "the decision informed or the verified change in accuracy or performance"
+        return "To add context, name the decision this analysis informed or the verified change it produced, if known."
     if re.search(r"data|pipeline|etl|extract|transform|database", lowered):
-        return "the data volume, refresh frequency, processing time, or error-rate change"
+        return "To add context, specify the data handled, refresh cadence, or verified processing improvement, if known."
     if re.search(r"customer|user|client|support|ticket", lowered):
-        return "the number of people or cases supported, response time, or service result"
-    return "the people, records, or tasks affected and the verified result"
+        return "To add context, specify who or how many people you supported and the service outcome, if known."
+    return "Add a concrete scope or outcome only if you can verify it from your experience."
 
 
 def _suggest_bullet(line, opener=None):
@@ -206,8 +208,6 @@ def _suggest_bullet(line, opener=None):
         rewritten = re.sub(r"\bindustry-standard\s+", "", rewritten, flags=re.I)
 
     rewritten = re.sub(r"\s+", " ", rewritten).rstrip(" .;,")
-    if not _has_quantified_impact(line):
-        rewritten += f"; if you can verify it, add {_impact_hint(line)}"
     return rewritten.rstrip(" .;") + "."
 
 

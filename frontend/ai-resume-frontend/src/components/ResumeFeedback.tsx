@@ -39,19 +39,7 @@ function legacyBulletRewrite(line: string) {
   }
 
   rewritten = rewritten.replace(/[.;\s]+$/, "");
-  if (hasVerifiedMeasure(original)) return `${rewritten}.`;
-
-  const lower = original.toLowerCase();
-  const hint = /dashboard|report|visuali[sz]|power bi|tableau|kpi/.test(lower)
-    ? "the KPIs or reports supported, users served, or reporting time saved"
-    : /data|pipeline|etl|extract|transform|database/.test(lower)
-      ? "data volume, refresh frequency, processing time, or error-rate change"
-      : /analys|insight|research|forecast|model/.test(lower)
-        ? "the decision informed or verified change in accuracy or performance"
-        : /customer|user|client|support|ticket/.test(lower)
-          ? "people or cases supported, response time, or service result"
-          : "the people, records, or tasks affected and the verified result";
-  return `${rewritten}; if you can verify it, add ${hint}.`;
+  return `${rewritten}.`;
 }
 
 export default function ResumeFeedback({ report }: { report?: ResumeAnalysisReport }) {
