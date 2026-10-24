@@ -75,12 +75,26 @@ if DATABASE_URL:
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
+    # Hugging Face container files are ephemeral. When a Storage Bucket is
+    # mounted at /data, keep SQLite there; otherwise preserve the local path.
+    configured_sqlite_path = os.environ.get('SQLITE_PATH')
+    hf_data_mount = os.environ.get('SPACE_ID') and os.path.ismount('/data')
+    sqlite_path = configured_sqlite_path or (
+        '/data/db.sqlite3' if hf_data_mount else BASE_DIR / 'db.sqlite3'
+    )
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': sqlite_path,
         }
     }
+
+    if os.environ.get('SPACE_ID') and not configured_sqlite_path and not hf_data_mount:
+        import logging
+        logging.getLogger(__name__).warning(
+            'Hugging Face Space has no DATABASE_URL or mounted /data volume; '
+            'SQLite user data may be lost when the Space restarts or rebuilds.'
+        )
 
 # PASSWORD VALIDATION
 AUTH_PASSWORD_VALIDATORS = [
