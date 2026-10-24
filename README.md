@@ -20,9 +20,9 @@ After configuration, the backend sends a verification code and, after successful
 
 Database migrations run when the Space starts, not while its image is built. Migrations add or update schema; they do not clear user tables.
 
-For durable Hugging Face data, use either:
+For durable Hugging Face data, configure:
 
-- **PostgreSQL (recommended):** set `DATABASE_URL` as a Space secret to the connection URL for your persistent PostgreSQL database (for example, Neon). Django uses that database and runs pending migrations at startup.
-- **SQLite:** attach a read/write Hugging Face Storage Bucket to the Space at `/data`. With no `DATABASE_URL`, the app uses `/data/db.sqlite3` when that mount is present. Locally, it continues to use `db.sqlite3` in the project folder.
+- **Database:** set `DATABASE_URL` as a Space secret to a persistent PostgreSQL database (for example, Neon). Django uses that database and runs pending migrations at startup. If no `DATABASE_URL` is set, SQLite is used; on Hugging Face it is placed at `/data/db.sqlite3` only when a bucket is mounted there.
+- **Resume files:** attach a read/write Hugging Face Storage Bucket to the Space at `/data`. Uploaded files are stored under `/data/media` while that volume is mounted. Without it, uploaded resume files are on temporary container disk even if PostgreSQL is configured.
 
 Hugging Face container disk is temporary. If the current Space is using its local SQLite file without a mounted bucket, a rebuild/restart can lose data already on that disk. Configure persistent storage before relying on rebuilds, and back up/import existing data before switching the database location. The app cannot recover a database that Hugging Face has already discarded.

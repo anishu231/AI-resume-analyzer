@@ -70,6 +70,7 @@ WSGI_APPLICATION = 'ats_checker.wsgi.application'
 
 # DATABASE — PostgreSQL on Neon (falls back to SQLite locally)
 DATABASE_URL = os.environ.get('DATABASE_URL')
+HF_DATA_MOUNTED = bool(os.environ.get('SPACE_ID') and os.path.ismount('/data'))
 if DATABASE_URL:
     DATABASES = {
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
@@ -78,9 +79,8 @@ else:
     # Hugging Face container files are ephemeral. When a Storage Bucket is
     # mounted at /data, keep SQLite there; otherwise preserve the local path.
     configured_sqlite_path = os.environ.get('SQLITE_PATH')
-    hf_data_mount = os.environ.get('SPACE_ID') and os.path.ismount('/data')
     sqlite_path = configured_sqlite_path or (
-        '/data/db.sqlite3' if hf_data_mount else BASE_DIR / 'db.sqlite3'
+        '/data/db.sqlite3' if HF_DATA_MOUNTED else BASE_DIR / 'db.sqlite3'
     )
     DATABASES = {
         'default': {
@@ -89,7 +89,7 @@ else:
         }
     }
 
-    if os.environ.get('SPACE_ID') and not configured_sqlite_path and not hf_data_mount:
+    if os.environ.get('SPACE_ID') and not configured_sqlite_path and not HF_DATA_MOUNTED:
         import logging
         logging.getLogger(__name__).warning(
             'Hugging Face Space has no DATABASE_URL or mounted /data volume; '
@@ -132,7 +132,15 @@ GMAIL_RELAY_TOKEN = os.environ.get('GMAIL_RELAY_TOKEN', '')
 
 # MEDIA FILES (for resume upload)
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT') or (
+    '/data/media' if HF_DATA_MOUNTED else os.path.join(BASE_DIR, 'media')
+)
+if os.environ.get('SPACE_ID') and not HF_DATA_MOUNTED:
+    import logging
+    logging.getLogger(__name__).warning(
+        'Hugging Face Space has no mounted /data volume; uploaded resume files '
+        'may be lost when the Space restarts or rebuilds.'
+    )
 
 # DEFAULT PK
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
