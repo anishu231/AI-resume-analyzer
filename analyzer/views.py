@@ -71,14 +71,14 @@ def extract_keywords(text, max_keywords=None):
     if max_keywords:
         from collections import Counter
         return [word for word, _ in Counter(filtered).most_common(max_keywords)]
-
+    
     return filtered
 
 
 def get_top_keywords(text, max_keywords=30):
     """Get top-N most frequent keywords — used for JD's 'important terms' list."""
     return extract_keywords(text, max_keywords=max_keywords)
-
+    
     # from collections import Counter
     # return [word for word, _ in Counter(filtered).most_common(max_keywords)]
 def get_top_keywords(text, max_keywords=30):
@@ -176,22 +176,22 @@ def login_user(request):
 @permission_classes([IsAuthenticated])
 def delete_session(request, session_id):
     print("DELETE SESSION ID =", session_id)
-
+    
     # Pehle user-owned candidates try karo
     candidates = Candidate.objects.filter(session_id=session_id, user=request.user)
-
+    
     # Agar nahi mile, to bina user filter ke try karo (legacy/null-user records ke liye)
     if not candidates.exists():
         candidates = Candidate.objects.filter(session_id=session_id)
-
+    
     print("FOUND =", candidates.count())
-
+    
     if not candidates.exists():
         return Response({"error": "Session not found"}, status=404)
-
+    
     deleted_count = candidates.count()
     candidates.delete()
-
+    
     return Response({
         "message": "Session deleted successfully",
         "deleted_count": deleted_count,
@@ -358,6 +358,7 @@ def upload_resume(request):
                 score=final_score/100,
                 semantic_similarity=section_scores.get('job_relevance', 0) / 100,
                 skill_match_score=section_scores.get('role_skills', 0) / 100,
+                job_description_text=job_description_text,
                 experience_score=section_scores.get(
                     'experience_and_scope', section_scores.get('projects_and_education', 0)
                 ) / 100,
@@ -482,6 +483,23 @@ def dashboard_data(request):
     for cand in all_candidates:
         match_score = MatchScore.objects.filter(candidate=cand).first()
         score = round((match_score.score * 100) if match_score else 0, 1)
+        analysis_report = None
+        if match_score and match_score.analysis_report:
+            analysis_report = dict(match_score.analysis_report)
+            resume_skills = set(extract_skills(cand.extracted_text or ""))
+
+            def normalize_report_skills(values):
+                normalized = set()
+                for value in values or []:
+                    normalized.update(extract_skills(str(value)))
+                return normalized
+
+            analysis_report['matched_skills'] = sorted(
+                normalize_report_skills(analysis_report.get('matched_skills')) & resume_skills
+            )
+            analysis_report['missing_skills'] = sorted(
+                normalize_report_skills(analysis_report.get('missing_skills')) - resume_skills
+            )
         
         if score >= min_score:
             candidates_list.append({
@@ -493,7 +511,7 @@ def dashboard_data(request):
                 "skills_count": len(cand.extracted_skills or []),
                 "analyzed_at": cand.created_at.isoformat() if cand.created_at else None,
                 "matched_keywords": (match_score.matched_skills if match_score else [])[:10],
-                "match_report": (match_score.analysis_report or None) if match_score else None,
+                "match_report": analysis_report,
                 "session_id": getattr(cand, 'session_id', None)
             })
     

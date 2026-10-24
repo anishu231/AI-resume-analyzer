@@ -10,6 +10,50 @@ const LABELS: Record<string, string> = {
   resume_readability: "Resume structure and readability",
 };
 
+const hasVerifiedMeasure = (line: string) =>
+  /(?:[$₹€]\s*\d|\b\d[\d,.]*\s*(?:%|x|k|m|b|hours?|days?|weeks?|months?|users?|customers?|clients?|employees?|people|teams?|projects?|reports?|dashboards?|kpis?|records?|requests?|tickets?|transactions?|rows?|files?|minutes?|seconds?|gb|tb|mb)(?![a-z0-9]))/i.test(line);
+
+function legacyBulletRewrite(line: string) {
+  const original = line.replace(/^[\s•●▪◦*\-–—]+/, "").trim();
+  if (!original) return "Review each bullet and describe your own action and verified result.";
+
+  let rewritten = original;
+  const responsible = rewritten.match(/^responsible for\s+([a-z]+ing)\b\s*(.*)$/i);
+  const gerunds: Record<string, string> = {
+    analyzing: "Analyzed", building: "Built", calculating: "Calculated", cleaning: "Cleaned",
+    coordinating: "Coordinated", creating: "Created", designing: "Designed", developing: "Developed",
+    extracting: "Extracted", implementing: "Implemented", leading: "Led", maintaining: "Maintained",
+    managing: "Managed", modeling: "Modeled", monitoring: "Monitored", optimizing: "Optimized",
+    processing: "Processed", testing: "Tested", transforming: "Transformed", visualizing: "Visualized",
+  };
+
+  if (responsible && gerunds[responsible[1].toLowerCase()]) {
+    rewritten = `${gerunds[responsible[1].toLowerCase()]} ${responsible[2]}`;
+  } else if (/^worked on\s+/i.test(rewritten)) {
+    rewritten = `Contributed to ${rewritten.replace(/^worked on\s+/i, "")} by [state your specific contribution]`;
+  } else {
+    rewritten = rewritten
+      .replace(/^Conducted detailed analysis on\b/i, "Analyzed")
+      .replace(/\bfor improved\b/i, "to improve")
+      .replace(/\bindustry-standard\s+/i, "");
+  }
+
+  rewritten = rewritten.replace(/[.;\s]+$/, "");
+  if (hasVerifiedMeasure(original)) return `${rewritten}.`;
+
+  const lower = original.toLowerCase();
+  const hint = /dashboard|report|visuali[sz]|power bi|tableau|kpi/.test(lower)
+    ? "the KPIs or reports supported, users served, or reporting time saved"
+    : /data|pipeline|etl|extract|transform|database/.test(lower)
+      ? "data volume, refresh frequency, processing time, or error-rate change"
+      : /analys|insight|research|forecast|model/.test(lower)
+        ? "the decision informed or verified change in accuracy or performance"
+        : /customer|user|client|support|ticket/.test(lower)
+          ? "people or cases supported, response time, or service result"
+          : "the people, records, or tasks affected and the verified result";
+  return `${rewritten}; if you can verify it, add ${hint}.`;
+}
+
 export default function ResumeFeedback({ report }: { report?: ResumeAnalysisReport }) {
   if (!report) return null;
   const repetition = report.repetition_checks;
@@ -48,7 +92,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
 
       <section className="grid gap-4 sm:grid-cols-2">
         <div>
-          <h4 className="mb-2 text-sm font-semibold text-green-800">Relevant skills found</h4>
+          <h4 className="mb-2 text-sm font-semibold text-green-800">Relevant job skills found</h4>
           <div className="flex flex-wrap gap-1.5">
             {report.matched_skills.map((skill) => (
               <span key={skill} className="rounded-md bg-green-50 px-2 py-1 text-xs text-green-800">{skill}</span>
@@ -57,14 +101,14 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
           </div>
         </div>
         <div>
-          <h4 className="mb-2 text-sm font-semibold text-amber-800">Skills not found in extracted text</h4>
+          <h4 className="mb-2 text-sm font-semibold text-amber-800">JD skills not found in resume</h4>
           <div className="flex flex-wrap gap-1.5">
             {report.missing_skills.map((skill) => (
               <span key={skill} className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-800">{skill}</span>
             ))}
-            {!report.missing_skills.length && <p className="text-xs text-gray-500">No catalogued skill gaps detected.</p>}
+            {!report.missing_skills.length && <p className="text-xs text-gray-500">No supported job-skill gaps were detected.</p>}
           </div>
-          <p className="mt-2 text-[11px] text-gray-500">Only add a skill if you can support it with real experience.</p>
+          <p className="mt-2 text-[11px] text-gray-500">This list includes recognized tools and skills, not job titles or degree names. Only add a skill if you can support it with real experience.</p>
         </div>
       </section>
 
@@ -88,11 +132,15 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         <div className="space-y-2">
           {report.bullet_feedback.map((item, index) => (
             <div key={`${item.original}-${index}`} className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
-              {item.original && <p className="text-xs italic text-gray-700">“{item.original}”</p>}
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-900">
-                {item.issues.map((issue) => <li key={issue}>{issue}</li>)}
-              </ul>
-              <p className="mt-2 text-xs leading-5 text-blue-900">{item.suggestion}</p>
+              {item.original && <p className="text-xs italic text-gray-700">Original: “{item.original}”</p>}
+              {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).length > 0 && (
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-900">
+                  {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+              )}
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-blue-800">Suggested rewrite</p>
+              <p className="text-xs leading-5 text-blue-900">{item.suggested_version || legacyBulletRewrite(item.original)}</p>
+              <p className="mt-1 text-[11px] text-gray-500">Replace bracketed prompts only with facts you can verify.</p>
             </div>
           ))}
         </div>

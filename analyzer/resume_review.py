@@ -25,13 +25,23 @@ REQUIREMENT_CUES = (
     "collaborat", "implement", "maintain", "support", "work with", "knowledge",
 )
 WEAK_OPENERS = {
-    "responsible for": "Replace this passive opener with the action you personally took.",
-    "worked on": "Name the specific action you took instead of saying you worked on it.",
-    "helped": "Clarify your own contribution; avoid making your role sound smaller than it was.",
-    "assisted": "State the part you owned or completed, if you can support it accurately.",
-    "participated in": "Describe your contribution and what changed because of it.",
-    "involved in": "Replace this vague opener with a concrete action you performed.",
-    "duties included": "Lead with the outcome or action instead of listing duties.",
+    "responsible for": "Starts with a duty; lead with the action you performed.",
+    "worked on": "‘Worked on’ does not show your specific contribution.",
+    "helped": "Clarify the part you personally completed.",
+    "assisted": "Name the part you personally handled.",
+    "participated in": "Clarify your contribution to this work.",
+    "involved in": "Name the action you personally performed.",
+    "duties included": "Lead with an action you performed.",
+}
+GERUND_TO_PAST = {
+    "analyzing": "Analyzed", "building": "Built", "calculating": "Calculated",
+    "cleaning": "Cleaned", "collaborating": "Collaborated", "coordinating": "Coordinated",
+    "creating": "Created", "designing": "Designed", "developing": "Developed",
+    "extracting": "Extracted", "implementing": "Implemented", "leading": "Led",
+    "maintaining": "Maintained", "managing": "Managed", "modeling": "Modeled",
+    "monitoring": "Monitored", "optimizing": "Optimized", "preparing": "Prepared",
+    "processing": "Processed", "reporting": "Reported", "testing": "Tested",
+    "transforming": "Transformed", "visualizing": "Visualized", "writing": "Wrote",
 }
 ACTION_VERBS = {
     "built", "created", "designed", "developed", "delivered", "improved", "reduced",
@@ -102,6 +112,17 @@ def _resume_lines(text):
     return lines or _sentences(text)
 
 
+def _has_quantified_impact(line):
+    measure = (
+        r"(?:[$₹€]\s*\d[\d,.]*|\b\d[\d,.]*\s*(?:%|x|k|m|b|"
+        r"hours?|days?|weeks?|months?|years?|users?|customers?|clients?|"
+        r"employees?|people|teams?|projects?|reports?|dashboards?|kpis?|"
+        r"records?|requests?|tickets?|transactions?|rows?|files?|"
+        r"minutes?|seconds?|gb|tb|mb)(?![a-z0-9]))"
+    )
+    return bool(re.search(measure, line or "", re.I))
+
+
 def _bullet_feedback(lines):
     feedback = []
     openers = Counter()
@@ -123,18 +144,16 @@ def _bullet_feedback(lines):
         first_word = re.sub(r"[^a-z]", "", words[0].lower()) if words else ""
         if first_word in repeated_openers and first_word in ACTION_VERBS:
             issues.append(f"Several bullets start with '{first_word}'; vary the opening verbs where accurate.")
-        if not re.search(r"\d|%|\$|\b(?:hours?|days?|weeks?|months?|users?|customers?|records?|requests?)\b", lowered):
-            issues.append("No scale or outcome is stated; add a truthful metric or result if available.")
+        if not _has_quantified_impact(line):
+            issues.append("This line does not show measurable scope or impact.")
         if len(words) > 32:
-            issues.append("This bullet is long; shorten it to one action and its clearest result.")
+            issues.append("This line is long; keep its main action and most relevant detail.")
         if issues:
+            suggested_version = _suggest_bullet(line, opener)
             feedback.append({
                 "original": line[:260],
                 "issues": issues[:2],
-                "suggestion": (
-                    "Rewrite as: [specific action] + [scope or method] + [verified result]. "
-                    "Use real figures only; do not add a result you cannot substantiate."
-                ),
+                "suggested_version": suggested_version,
             })
         if len(feedback) >= 5:
             break
@@ -143,9 +162,53 @@ def _bullet_feedback(lines):
         feedback.append({
             "original": "",
             "issues": ["No obvious weak or repetitive achievement bullet was detected in the extracted text."],
-            "suggestion": "Check that each experience and project bullet starts with your action and includes a result when you can verify one.",
+            "suggested_version": "No rewrite is needed. Add a verified outcome only if it makes the accomplishment clearer.",
         })
     return feedback
+
+
+def _impact_hint(line):
+    lowered = line.lower()
+    if re.search(r"dashboard|report|visuali[sz]|power bi|tableau|kpi", lowered):
+        return "the KPIs or reports supported, users served, or reporting time saved"
+    if re.search(r"analys|insight|research|forecast|model", lowered):
+        return "the decision informed or the verified change in accuracy or performance"
+    if re.search(r"data|pipeline|etl|extract|transform|database", lowered):
+        return "the data volume, refresh frequency, processing time, or error-rate change"
+    if re.search(r"customer|user|client|support|ticket", lowered):
+        return "the number of people or cases supported, response time, or service result"
+    return "the people, records, or tasks affected and the verified result"
+
+
+def _suggest_bullet(line, opener=None):
+    """Polish this exact bullet and suggest a relevant, verifiable impact detail."""
+    rewritten = re.sub(r"^[\s•●▪◦*\-–—]+", "", line).strip()
+
+    if opener == "responsible for":
+        remainder = re.sub(r"^responsible for\s+", "", rewritten, flags=re.I)
+        gerund = re.match(r"([A-Za-z]+ing)\b\s*(.*)", remainder, re.I)
+        if gerund and gerund.group(1).lower() in GERUND_TO_PAST:
+            rewritten = f"{GERUND_TO_PAST[gerund.group(1).lower()]} {gerund.group(2)}"
+        else:
+            rewritten = f"Performed [specific action] for {remainder}"
+    elif opener == "worked on":
+        remainder = re.sub(r"^worked on\s+", "", rewritten, flags=re.I)
+        rewritten = f"Contributed to {remainder} by [state your specific contribution]"
+    elif opener in {"helped", "assisted", "participated in", "involved in"}:
+        remainder = re.sub(rf"^{re.escape(opener)}\s+(?:with\s+|in\s+|to\s+)?", "", rewritten, flags=re.I)
+        rewritten = f"Contributed to {remainder} through [state the part you personally completed]"
+    elif opener == "duties included":
+        remainder = re.sub(r"^duties included\s+", "", rewritten, flags=re.I)
+        rewritten = f"[Action you performed] {remainder}"
+    else:
+        rewritten = re.sub(r"^Conducted detailed analysis on\b", "Analyzed", rewritten, flags=re.I)
+        rewritten = re.sub(r"\bfor improved\b", "to improve", rewritten, flags=re.I)
+        rewritten = re.sub(r"\bindustry-standard\s+", "", rewritten, flags=re.I)
+
+    rewritten = re.sub(r"\s+", " ", rewritten).rstrip(" .;,")
+    if not _has_quantified_impact(line):
+        rewritten += f"; if you can verify it, add {_impact_hint(line)}"
+    return rewritten.rstrip(" .;") + "."
 
 
 def _repetition_checks(text, lines):
@@ -175,7 +238,7 @@ def _level_evidence(resume_text, bullets, level):
     project_signals = len(re.findall(r"\b(?:projects?|internships?|capstone|coursework|hackathons?)\b", lowered))
     leadership_signals = len(re.findall(r"\b(?:led|lead|managed|mentored|owned|architected|directed|supervised)\b", lowered))
     has_education = bool(re.search(r"\b(?:education|bachelor|b\.sc|bsc|master|m\.sc|msc|degree|university)\b", lowered))
-    metric_bullets = sum(bool(re.search(r"\d|%|\$", bullet)) for bullet in bullets)
+    metric_bullets = sum(_has_quantified_impact(bullet) for bullet in bullets)
     metric_rate = metric_bullets / max(len(bullets), 1)
 
     if level == "entry":
@@ -281,7 +344,7 @@ def review_resume(resume_text, job_text, experience_level="entry", resume_skills
             "requirement_coverage": requirement_coverage,
             "role_skills": skill_score,
             "experience_and_scope": level_score,
-            "impact_evidence": min(100, round(sum(bool(re.search(r"\d|%|\$", line)) for line in resume_sentences) / max(len(resume_sentences), 1) * 250)),
+            "impact_evidence": min(100, round(sum(_has_quantified_impact(line) for line in resume_sentences) / max(len(resume_sentences), 1) * 250)),
             "resume_readability": readability,
         }
         weights = {

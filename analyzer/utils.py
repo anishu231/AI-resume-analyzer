@@ -16,13 +16,57 @@ except OSError:
 # import nltk; nltk.download('stopwords')
 STOPWORDS = set(stopwords.words("english"))
 
-# Curated skill dictionary (expand as needed)
+# Curated, job-relevant skills. Do not treat spaCy organization/product names,
+# job titles, degrees, or arbitrary noun phrases as skills.
 SKILL_KEYWORDS = {
     'python', 'javascript', 'typescript', 'react', 'django', 'flask', 'fastapi',
     'sql', 'postgresql', 'mongodb', 'machine learning', 'deep learning', 'nlp',
     'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'tensorflow', 'pytorch',
-    'git', 'ci/cd', 'agile', 'scrum', 'rest api', 'graphql', 'linux', 'bash'
+    'git', 'ci/cd', 'agile', 'scrum', 'rest api', 'graphql', 'linux', 'bash',
+    'power bi', 'power query', 'dax', 'excel', 'tableau', 'looker', 'looker studio',
+    'google sheets', 'data analysis', 'data visualization', 'data modeling',
+    'data cleaning', 'data transformation', 'data extraction', 'data engineering',
+    'data pipelines', 'etl', 'elt', 'data quality', 'business intelligence',
+    'statistics', 'descriptive statistics', 'pandas', 'numpy', 'scikit-learn',
+    'matplotlib', 'seaborn', 'r', 'mysql', 'sqlite', 'sql server', 'nosql',
+    'firebase', 'redis', 'snowflake', 'databricks', 'apache spark', 'airflow',
+    'dbt', 'excel pivot tables', 'vlookup', 'xlookup', 'jira', 'confluence',
+    'project management', 'project coordination', 'stakeholder management',
+    'communication', 'written communication', 'verbal communication',
+    'documentation', 'technical writing', 'problem solving', 'critical thinking',
+    'analytical thinking', 'analytical skills', 'leadership', 'collaboration', 'time management',
+    'requirements gathering', 'quality assurance', 'software testing',
+    'unit testing', 'api testing', 'continuous integration', 'continuous delivery',
+    'terraform', 'ansible', 'jenkins', 'github actions', 'gitlab ci', 'oauth',
+    'jwt', 'cybersecurity', 'network security', 'data privacy', 'html', 'css',
+    'node.js', 'express', 'next.js', 'vue', 'angular', 'java', 'c++', 'c#',
+    '.net', 'spring boot', 'php', 'laravel', 'ruby', 'rails', 'go', 'golang',
+    'kotlin', 'swift', 'microservices', 'system design',
+    'linux administration', 'shell scripting', 'bash scripting'
 }
+
+SKILL_ALIASES = {
+    'power bi': ('powerbi', 'microsoft power bi'),
+    'excel': ('ms excel', 'microsoft excel'),
+    'postgresql': ('postgres', 'postgre sql'),
+    'scikit-learn': ('scikit learn', 'sklearn'),
+    'apache spark': ('spark', 'pyspark'),
+    'looker studio': ('google data studio', 'data studio'),
+    'rest api': ('restful api', 'rest apis'),
+    'node.js': ('node js',),
+    'next.js': ('next js',),
+    'c++': ('cpp',),
+    'c#': ('c sharp',),
+    'ci/cd': ('ci cd', 'continuous integration/continuous delivery'),
+    'github actions': ('github action',),
+    'sql server': ('microsoft sql server', 'mssql'),
+    'data pipelines': ('data pipeline',),
+}
+
+
+def _contains_skill(text: str, phrase: str) -> bool:
+    phrase_pattern = re.escape(phrase).replace(r'\ ', r'\s+')
+    return bool(re.search(rf'(?<![a-z0-9]){phrase_pattern}(?![a-z0-9])', text, re.I))
 
 def extract_text_from_file(file_path: str, file_type: str) -> str:
     """Extract raw text from PDF or DOCX files"""
@@ -54,28 +98,25 @@ def clean_text(text: str) -> str:
     return " ".join(tokens)
 
 def extract_skills(text: str) -> list:
-    """Extract skills using keyword matching + basic NER"""
+    """Return only catalogued skills, normalized across common spelling variants."""
     if not text:
         return []
-    
-    text_lower = text.lower()
+
+    searchable_text = re.sub(r'\s+', ' ', text.lower())
     found_skills = set()
-    
-    # 1. Keyword matching
     for skill in SKILL_KEYWORDS:
-        if skill in text_lower:
+        if skill == 'r':
+            if re.search(r'(?<![a-z0-9])r\s+(?:programming|language|studio)(?![a-z0-9])', searchable_text):
+                found_skills.add(skill)
+            continue
+        variants = (skill, *SKILL_ALIASES.get(skill, ()))
+        if any(_contains_skill(searchable_text, variant) for variant in variants):
             found_skills.add(skill)
-    
-    # 2. Optional: spaCy NER for organizations/products that might be skills
-    doc = nlp(text)
-    for ent in doc.ents:
-        if ent.label_ in ["PRODUCT", "ORG"] and 2 <= len(ent.text.split()) <= 4:
-            candidate = ent.text.lower().strip()
-            # Avoid adding generic terms
-            if candidate not in STOPWORDS and candidate not in ['university', 'college', 'company']:
-                found_skills.add(candidate)
-    
-    return sorted(list(found_skills))
+
+    # Avoid double-reporting REST when the more specific REST API skill exists.
+    if 'rest api' in found_skills:
+        found_skills.discard('rest')
+    return sorted(found_skills)
 
 def calculate_weighted_score(resume_text: str, job_text: str, resume_skills: list, job_skills: list, resume_doc=None, job_doc=None) -> dict:
     """

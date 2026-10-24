@@ -31,7 +31,8 @@ export interface ResumeAnalysisReport {
   bullet_feedback: Array<{
     original: string;
     issues: string[];
-    suggestion: string;
+    suggested_version?: string;
+    suggestion?: string;
   }>;
   repetition_checks: {
     repeated_terms: Array<{ term: string; count: number }>;
