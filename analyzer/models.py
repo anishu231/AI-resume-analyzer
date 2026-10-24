@@ -1,6 +1,23 @@
 # analyzer/models.py
 import uuid
 from django.db import models
+from django.contrib.auth.models import User
+
+
+class SignupEmailVerification(models.Model):
+    email = models.EmailField(db_index=True)
+    username = models.CharField(max_length=150)
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    greeting_sent_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
 
 # ============================================================================
 # JobDescription Model
@@ -19,6 +36,13 @@ class JobDescription(models.Model):
 # Candidate Model (UPDATED with session_id)
 # ============================================================================
 class Candidate(models.Model):
+    user = models.ForeignKey(
+    User,
+    on_delete=models.CASCADE,
+    related_name="candidates",
+    null=True,
+    blank=True
+)
     name = models.CharField(max_length=100, blank=True, default="Anonymous")
     email = models.EmailField(blank=True)
     resume_file = models.FileField(upload_to='resumes/%Y/%m/%d/')

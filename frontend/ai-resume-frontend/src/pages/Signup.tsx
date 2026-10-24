@@ -18,10 +18,16 @@ import {
   LayoutGrid,
 } from "lucide-react";
 
-const REGISTER_URL = "https://anish321-ats-resume-analyzer.hf.space/api/register/";
+const API_BASE = import.meta.env.PROD
+  ? ""
+  : import.meta.env.VITE_API_URL || "https://anish321-ats-resume-analyzer.hf.space";
+const SEND_OTP_URL = `${API_BASE}/api/signup/send-otp/`;
+const VERIFY_OTP_URL = `${API_BASE}/api/signup/verify-otp/`;
+const COMPLETE_SIGNUP_URL = `${API_BASE}/api/signup/complete/`;
 
-type Fields = "username" | "email" | "password" | "confirm";
+type Fields = "username" | "email" | "password" | "confirm" | "otp";
 type Errors = Partial<Record<Fields | "form", string>>;
+type SignupStep = "details" | "otp" | "password";
 
 const STEPS = [
   { icon: UserPlus, title: "Create your account", text: "It takes less than a minute." },
@@ -33,7 +39,7 @@ const STEPS = [
 const parseServerErrors = (data: any): Errors => {
   const out: Errors = {};
   if (!data || typeof data !== "object") return out;
-  (["username", "email", "password"] as const).forEach((f) => {
+  (["username", "email", "password", "otp"] as const).forEach((f) => {
     const v = data[f];
     if (Array.isArray(v) && v.length) out[f] = v.join(" ");
     else if (typeof v === "string") out[f] = v;
@@ -47,6 +53,9 @@ export default function Signup() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState({ username: "", email: "", password: "", confirm: "" });
+  const [step, setStep] = useState<SignupStep>("details");
+  const [otp, setOtp] = useState("");
+  const [verificationToken, setVerificationToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [capsOn, setCapsOn] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -83,13 +92,18 @@ export default function Signup() {
     { label: "Strong", bar: "bg-emerald-600", text: "text-emerald-700" },
   ][strength];
 
-  const validate = (): Errors => {
+  const validateDetails = (): Errors => {
     const e: Errors = {};
     const u = form.username.trim();
     if (u.length < 3) e.username = "Username must be at least 3 characters.";
     else if (!/^[\w.@+-]+$/.test(u))
       e.username = "Use only letters, numbers and @ . + - _ (no spaces).";
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) e.email = "Enter a valid email address.";
+    return e;
+  };
+
+  const validatePassword = (): Errors => {
+    const e: Errors = {};
     if (!rules.every((r) => r.ok)) e.password = "Password does not meet all the requirements.";
     if (form.confirm !== form.password) e.confirm = "Passwords do not match.";
     return e;
@@ -99,7 +113,11 @@ export default function Signup() {
     ev.preventDefault();
     if (loading) return;
 
-    const clientErrors = validate();
+    const clientErrors = step === "details"
+      ? validateDetails()
+      : step === "otp"
+        ? (/^\d{6}$/.test(otp) ? {} : { otp: "Enter the 6-digit code sent to your email." })
+        : validatePassword();
     if (Object.keys(clientErrors).length) {
       setErrors(clientErrors);
       return;
@@ -109,38 +127,62 @@ export default function Signup() {
     setLoading(true);
 
     try {
-      const res = await fetch(REGISTER_URL, {
+      const endpoint = step === "details"
+        ? SEND_OTP_URL
+        : step === "otp"
+          ? VERIFY_OTP_URL
+          : COMPLETE_SIGNUP_URL;
+      const body = step === "details"
+        ? { username: form.username.trim(), email: form.email.trim() }
+        : step === "otp"
+          ? { username: form.username.trim(), email: form.email.trim(), otp }
+          : { verification_token: verificationToken, password: form.password };
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: form.username.trim(),
-          email: form.email.trim(),
-          password: form.password,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         const serverErrors = parseServerErrors(data);
-        if (!Object.keys(serverErrors).length) serverErrors.form = "Signup failed. Please try again.";
+        if (!Object.keys(serverErrors).length) {
+          serverErrors.form = data.error || data.detail || "Signup failed. Please try again.";
+        }
         setErrors(serverErrors);
-        toast.error("Please fix the highlighted fields.");
+        toast.error(serverErrors.form || "Please fix the highlighted fields.");
         return;
       }
 
-      try {
-        localStorage.setItem("remembered_username", form.username.trim());
-      } catch {
-        /* storage unavailable */
+      if (step === "details") {
+        setStep("otp");
+        setOtp("");
+        toast.success("Verification code sent to your email.");
+      } else if (step === "otp") {
+        if (typeof data.verification_token !== "string" || !data.verification_token) {
+          throw new Error("Email verification did not complete. Please try again.");
+        }
+        setVerificationToken(data.verification_token);
+        setStep("password");
+        toast.success("Email verified. A welcome message has been sent.");
+      } else {
+        try {
+          localStorage.setItem("remembered_username", form.username.trim());
+        } catch {
+          /* storage unavailable */
+        }
+        toast.success("Account created! Please sign in.");
+        navigate("/login");
       }
-      toast.success("Account created! Please log in.");
-      navigate("/login");
     } catch (err) {
       console.error(err);
+      const message = err instanceof Error && err.message !== "Failed to fetch"
+        ? err.message
+        : "Could not reach the server. It may be waking up, please wait a few seconds and try again.";
       setErrors({
-        form: "Could not reach the server. It may be waking up, please wait a few seconds and try again.",
+        form: message,
       });
-      toast.error("Server error");
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -213,8 +255,16 @@ export default function Signup() {
               <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-green-100 text-green-700">
                 <UserPlus size={26} />
               </span>
-              <h1 className="text-3xl font-bold text-gray-900">Create account</h1>
-              <p className="mt-2 text-gray-500">Start screening resumes in minutes</p>
+              <h1 className="text-3xl font-bold text-gray-900">
+                {step === "details" ? "Create account" : step === "otp" ? "Verify your email" : "Set your password"}
+              </h1>
+              <p className="mt-2 text-gray-500">
+                {step === "details"
+                  ? "Start by verifying your email"
+                  : step === "otp"
+                    ? "Enter the code we sent to your inbox"
+                    : "Your email is verified. Finish creating your account."}
+              </p>
             </div>
 
             {errors.form && (
@@ -227,6 +277,8 @@ export default function Signup() {
             )}
 
             <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+              {step === "details" && (
+                <>
               {/* Username */}
               <div>
                 <label htmlFor="su-username" className="mb-2 block text-sm font-medium text-gray-700">
@@ -271,6 +323,89 @@ export default function Signup() {
                 </div>
                 <FieldError id="su-email-err" msg={errors.email} />
               </div>
+                </>
+              )}
+
+              {step === "otp" && (
+                <>
+                  <p className="text-sm text-gray-600">
+                    Enter the 6-digit code sent to <span className="font-semibold text-gray-900">{form.email}</span>.
+                  </p>
+                  <div>
+                    <label htmlFor="su-otp" className="mb-2 block text-sm font-medium text-gray-700">
+                      Email verification code
+                    </label>
+                    <div className="relative">
+                      <Mail size={18} className={iconClass} />
+                      <input
+                        id="su-otp"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        autoFocus
+                        maxLength={6}
+                        placeholder="Enter 6-digit code"
+                        value={otp}
+                        onChange={(e) => {
+                          setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                          setErrors((current) => ({ ...current, otp: undefined, form: undefined }));
+                        }}
+                        aria-invalid={!!errors.otp}
+                        aria-describedby={errors.otp ? "su-otp-err" : undefined}
+                        className={`${inputClass(!!errors.otp)} pr-4 tracking-[0.35em]`}
+                      />
+                    </div>
+                    <FieldError id="su-otp-err" msg={errors.otp} />
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVerificationToken("");
+                        setOtp("");
+                        setStep("details");
+                      }}
+                      className="font-medium text-gray-600 hover:text-gray-900"
+                    >
+                      Change email
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (loading) return;
+                        setErrors({});
+                        setLoading(true);
+                        try {
+                          const res = await fetch(SEND_OTP_URL, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ username: form.username.trim(), email: form.email.trim() }),
+                          });
+                          const data = await res.json().catch(() => ({}));
+                          if (!res.ok) throw new Error(data.error || data.detail || "Could not resend the code.");
+                          toast.success("A new verification code has been sent.");
+                        } catch (err) {
+                          const message = err instanceof Error ? err.message : "Could not resend the code.";
+                          setErrors({ form: message });
+                          toast.error(message);
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      disabled={loading}
+                      className="font-semibold text-green-700 hover:text-green-900 disabled:opacity-60"
+                    >
+                      Resend code
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {step === "password" && (
+                <>
+                  <p className="rounded-xl bg-green-50 px-4 py-3 text-sm text-green-800">
+                    Email verified. Now choose a password for <span className="font-semibold">{form.username}</span>.
+                  </p>
 
               {/* Password */}
               <div>
@@ -370,6 +505,8 @@ export default function Signup() {
                 )}
                 <FieldError id="su-confirm-err" msg={errors.confirm} />
               </div>
+                </>
+              )}
 
               <button
                 type="submit"
@@ -378,11 +515,13 @@ export default function Signup() {
               >
                 {loading ? (
                   <>
-                    <Loader2 size={18} className="animate-spin" /> Creating account…
+                    <Loader2 size={18} className="animate-spin" />
+                    {step === "details" ? "Sending code…" : step === "otp" ? "Verifying…" : "Creating account…"}
                   </>
                 ) : (
                   <>
-                    Create account <ArrowRight size={18} />
+                    {step === "details" ? "Send verification code" : step === "otp" ? "Verify email" : "Create account"}
+                    <ArrowRight size={18} />
                   </>
                 )}
               </button>

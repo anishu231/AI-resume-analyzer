@@ -21,9 +21,22 @@ INSTALLED_APPS = [
 
     'corsheaders',
     'rest_framework',
+    'rest_framework_simplejwt',
     'analyzer',
 ]
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}
+from datetime import timedelta
 
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+}
 # MIDDLEWARE
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # must be at top
@@ -41,7 +54,7 @@ ROOT_URLCONF = 'ats_checker.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / "frontend"],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -84,8 +97,22 @@ USE_I18N = True
 USE_TZ = True
 
 # STATIC FILES
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    BASE_DIR / "frontend",
+]
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Gmail SMTP settings are supplied as Hugging Face Space secrets. Never put the
+# sender password in frontend code or commit it to the repository.
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+EMAIL_TIMEOUT = 15
 
 # MEDIA FILES (for resume upload)
 MEDIA_URL = '/media/'

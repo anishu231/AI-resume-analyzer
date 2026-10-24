@@ -1,6 +1,7 @@
 #Django Core
 Django>=4.2
 djangorestframework>=3.14
+djangorestframework_simplejwt>=5.3,<6.0
 django-cors-headers>=4.3
 
 #ML & Data Science
