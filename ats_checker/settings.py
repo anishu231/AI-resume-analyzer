@@ -113,6 +113,8 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 EMAIL_TIMEOUT = 15
+GMAIL_RELAY_URL = os.environ.get('GMAIL_RELAY_URL', '')
+GMAIL_RELAY_TOKEN = os.environ.get('GMAIL_RELAY_TOKEN', '')
 
 # MEDIA FILES (for resume upload)
 MEDIA_URL = '/media/'

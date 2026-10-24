@@ -2,6 +2,7 @@ import logging
 import secrets
 from datetime import timedelta
 
+import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
@@ -44,13 +45,33 @@ class SignupCompleteSerializer(serializers.Serializer):
 
 
 def _email_is_configured():
-    return bool(settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD)
+    relay_requested = bool(settings.GMAIL_RELAY_URL or settings.GMAIL_RELAY_TOKEN)
+    relay_configured = bool(settings.GMAIL_RELAY_URL and settings.GMAIL_RELAY_TOKEN)
+    smtp_configured = bool(settings.EMAIL_HOST_USER and settings.EMAIL_HOST_PASSWORD)
+    return relay_configured or (not relay_requested and smtp_configured)
 
 
 def _send_email(subject, message, recipient):
     if not _email_is_configured():
         return False
     try:
+        if settings.GMAIL_RELAY_URL or settings.GMAIL_RELAY_TOKEN:
+            response = requests.post(
+                settings.GMAIL_RELAY_URL,
+                json={
+                    "token": settings.GMAIL_RELAY_TOKEN,
+                    "to": recipient,
+                    "subject": subject,
+                    "body": message,
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            result = response.json()
+            if result.get("ok") is not True:
+                raise RuntimeError("Gmail HTTPS relay rejected the email")
+            return True
+
         send_mail(
             subject,
             message,
