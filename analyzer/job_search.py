@@ -8,8 +8,8 @@ import requests
 
 
 EXPERIENCE_LABELS = {
-    "entry": "Entry-level (0–2 years)",
-    "mid": "Mid-level (2–10 years)",
+    "entry": "Entry-level (0-2 years)",
+    "mid": "Mid-level (2-10 years)",
     "senior": "Senior-level (10+ years)",
 }
 
@@ -58,6 +58,23 @@ def _extract_json(text):
     return json.loads(cleaned[start:end + 1])
 
 
+def _provider_error(response):
+    """Return a short, credential-free Gemini error for logs and the UI."""
+    try:
+        payload = response.json()
+        message = payload.get("error", {}).get("message", "")
+        code = payload.get("error", {}).get("status", "")
+    except (ValueError, AttributeError):
+        message, code = "", ""
+    message = re.sub(r"AIza[\w-]{20,}", "[redacted]", str(message))[:240]
+    detail = f"HTTP {response.status_code}"
+    if code:
+        detail += f" {code}"
+    if message:
+        detail += f": {message}"
+    return detail
+
+
 def find_official_jobs(role, experience_level, location=""):
     api_key = os.environ.get("JOB_SEARCH_GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -81,7 +98,7 @@ def find_official_jobs(role, experience_level, location=""):
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
     ]))
-    last_error = None
+    errors = []
     for model in models:
         try:
             response = requests.post(
@@ -98,7 +115,14 @@ def find_official_jobs(role, experience_level, location=""):
                 },
                 timeout=45,
             )
-            response.raise_for_status()
+            if not response.ok:
+                detail = _provider_error(response)
+                errors.append(f"{model}: {detail}")
+                print(f"[JOB SEARCH] {model} rejected the request ({detail})")
+                # Auth, access, and quota failures are not fixed by changing models.
+                if response.status_code in (401, 403, 429):
+                    break
+                continue
             candidate = response.json()["candidates"][0]
             text = "".join(part.get("text", "") for part in candidate.get("content", {}).get("parts", []))
             raw_jobs = _extract_json(text).get("jobs", [])
@@ -139,8 +163,9 @@ def find_official_jobs(role, experience_level, location=""):
             print(f"[JOB SEARCH] {model} returned {len(verified)} verified official-career listings")
             return verified
         except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
-            last_error = exc
-            status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            print(f"[JOB SEARCH] {model} failed (HTTP {status_code or 'request/parse error'})")
+            detail = str(exc).replace(api_key, "[redacted]")[:240] or "invalid Gemini response"
+            errors.append(f"{model}: {detail}")
+            print(f"[JOB SEARCH] {model} failed ({detail})")
 
-    raise RuntimeError("Gemini job search is temporarily unavailable. Please try again later.") from last_error
+    detail = errors[-1] if errors else "No Gemini model returned a response."
+    raise RuntimeError(f"Gemini job search failed. {detail}")
