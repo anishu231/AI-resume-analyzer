@@ -5,12 +5,14 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
-# Load spaCy once at module level (global)
+# Load spaCy once at module level (global). The small English model is optional:
+# minimal Space builds can use spaCy's built-in tokenizer when the model is absent
+# or fails to deserialize, which is sufficient for TF-IDF text normalization.
 try:
     nlp = spacy.load("en_core_web_sm")
-except OSError:
-    # Auto-download if not installed: python -m spacy download en_core_web_sm
-    raise ImportError("spaCy model 'en_core_web_sm' not found. Run: python -m spacy download en_core_web_sm")
+except Exception as exc:
+    print(f"[WARN] Could not load en_core_web_sm ({exc}); using blank English tokenizer.")
+    nlp = spacy.blank("en")
 
 # Download NLTK stopwords once (run once manually if needed)
 # import nltk; nltk.download('stopwords')
@@ -88,7 +90,7 @@ def clean_text(text: str) -> str:
         return ""
     doc = nlp(text.lower())
     tokens = [
-        token.lemma_.strip() for token in doc 
+        (token.lemma_.strip() or token.text.strip()).lower() for token in doc 
         if token.is_alpha 
         and token.text not in STOPWORDS 
         and len(token.text) > 2
