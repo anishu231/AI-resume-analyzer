@@ -70,18 +70,41 @@ WSGI_APPLICATION = 'ats_checker.wsgi.application'
 
 # DATABASE — PostgreSQL on Neon (falls back to SQLite locally)
 DATABASE_URL = os.environ.get('DATABASE_URL')
-HF_DATA_MOUNTED = bool(os.environ.get('SPACE_ID') and os.path.ismount('/data'))
+HF_SPACE = bool(os.environ.get('SPACE_ID'))
+HF_DATA_MOUNTED = bool(HF_SPACE and os.path.ismount('/data'))
 if DATABASE_URL:
     DATABASES = {
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
-    # Hugging Face container files are ephemeral. When a Storage Bucket is
-    # mounted at /data, keep SQLite there; otherwise preserve the local path.
+    # Always target /data on Spaces: when a Storage Bucket is mounted there,
+    # the database survives restarts/rebuilds. Without a bucket, the warning
+    # below makes clear that this path is still ephemeral.
     configured_sqlite_path = os.environ.get('SQLITE_PATH')
     sqlite_path = configured_sqlite_path or (
-        '/data/db.sqlite3' if HF_DATA_MOUNTED else BASE_DIR / 'db.sqlite3'
+        '/data/db.sqlite3' if HF_SPACE else BASE_DIR / 'db.sqlite3'
     )
+    if isinstance(sqlite_path, str):
+        os.makedirs(os.path.dirname(sqlite_path) or '.', exist_ok=True)
+    legacy_sqlite_path = BASE_DIR / 'db.sqlite3'
+    if (HF_SPACE and not configured_sqlite_path and isinstance(sqlite_path, str)
+            and sqlite_path != str(legacy_sqlite_path)
+            and not os.path.exists(sqlite_path) and legacy_sqlite_path.exists()):
+        # Preserve existing local accounts when the old container filesystem
+        # is still available during the first move to persistent storage.
+        import logging
+        import sqlite3
+        try:
+            with sqlite3.connect(str(legacy_sqlite_path)) as legacy_db:
+                with sqlite3.connect(sqlite_path) as persistent_db:
+                    legacy_db.backup(persistent_db)
+            logging.getLogger(__name__).info(
+                'Copied the existing SQLite database into the /data storage mount.'
+            )
+        except sqlite3.Error:
+            logging.getLogger(__name__).exception(
+                'Could not copy the existing SQLite database into /data.'
+            )
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -133,7 +156,7 @@ GMAIL_RELAY_TOKEN = os.environ.get('GMAIL_RELAY_TOKEN', '')
 # MEDIA FILES (for resume upload)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.environ.get('MEDIA_ROOT') or (
-    '/data/media' if HF_DATA_MOUNTED else os.path.join(BASE_DIR, 'media')
+    '/data/media' if HF_SPACE else os.path.join(BASE_DIR, 'media')
 )
 if os.environ.get('SPACE_ID') and not HF_DATA_MOUNTED:
     import logging
