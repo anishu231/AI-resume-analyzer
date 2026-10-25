@@ -13,35 +13,6 @@ const LABELS: Record<string, string> = {
 const hasVerifiedMeasure = (line: string) =>
   /(?:[$₹€]\s*\d|\b\d[\d,.]*\s*(?:%|x|k|m|b|hours?|days?|weeks?|months?|users?|customers?|clients?|employees?|people|teams?|projects?|reports?|dashboards?|kpis?|records?|requests?|tickets?|transactions?|rows?|files?|minutes?|seconds?|gb|tb|mb)(?![a-z0-9]))/i.test(line);
 
-function legacyBulletRewrite(line: string) {
-  const original = line.replace(/^[\s•●▪◦*\-–—]+/, "").trim();
-  if (!original) return "Review each bullet and describe your own action and verified result.";
-
-  let rewritten = original;
-  const responsible = rewritten.match(/^responsible for\s+([a-z]+ing)\b\s*(.*)$/i);
-  const gerunds: Record<string, string> = {
-    analyzing: "Analyzed", building: "Built", calculating: "Calculated", cleaning: "Cleaned",
-    coordinating: "Coordinated", creating: "Created", designing: "Designed", developing: "Developed",
-    extracting: "Extracted", implementing: "Implemented", leading: "Led", maintaining: "Maintained",
-    managing: "Managed", modeling: "Modeled", monitoring: "Monitored", optimizing: "Optimized",
-    processing: "Processed", testing: "Tested", transforming: "Transformed", visualizing: "Visualized",
-  };
-
-  if (responsible && gerunds[responsible[1].toLowerCase()]) {
-    rewritten = `${gerunds[responsible[1].toLowerCase()]} ${responsible[2]}`;
-  } else if (/^worked on\s+/i.test(rewritten)) {
-    rewritten = `Contributed to ${rewritten.replace(/^worked on\s+/i, "")} by [state your specific contribution]`;
-  } else {
-    rewritten = rewritten
-      .replace(/^Conducted detailed analysis on\b/i, "Analyzed")
-      .replace(/\bfor improved\b/i, "to improve")
-      .replace(/\bindustry-standard\s+/i, "");
-  }
-
-  rewritten = rewritten.replace(/[.;\s]+$/, "");
-  return `${rewritten}.`;
-}
-
 export default function ResumeFeedback({ report }: { report?: ResumeAnalysisReport }) {
   if (!report) return null;
   const repetition = report.repetition_checks;
@@ -118,7 +89,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
       <section>
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Bullet-point edits</h4>
         <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
-          {report.bullet_feedback.map((item, index) => (
+          {report.bullet_feedback.filter((item) => item.original).map((item, index) => (
             <div key={`${item.original}-${index}`} className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl border border-blue-100 bg-blue-50/60 p-3">
               {item.original && <p className="text-xs italic text-gray-700">Original: “{item.original}”</p>}
               {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).length > 0 && (
@@ -126,11 +97,15 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
                   {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).map((issue) => <li key={issue}>{issue}</li>)}
                 </ul>
               )}
-              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-blue-800">
-                {item.suggestion_source === "gemini" ? "AI-generated suggestion" : item.suggestion_source === "guidance" ? "Suggested improvement" : "Built-in suggestion"}
-              </p>
-              <p className="text-xs leading-5 text-blue-900">{item.suggested_version || legacyBulletRewrite(item.original)}</p>
-              <p className="mt-1 text-[11px] text-gray-500">Replace bracketed prompts only with facts you can verify.</p>
+              {item.suggestion_source === "gemini" && item.suggested_version ? (
+                <>
+                  <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-800">AI-generated suggestion ? Gemini</p>
+                  <p className="text-xs leading-5 text-emerald-900">{item.suggested_version}</p>
+                  <p className="mt-1 text-[11px] text-gray-500">Check that every detail is accurate before using it.</p>
+                </>
+              ) : (
+                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">Gemini did not return a rewrite for this line. Please retry the analysis; no built-in rewrite is shown.</p>
+              )}
             </div>
           ))}
         </div>
