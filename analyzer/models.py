@@ -99,6 +99,21 @@ class MatchScore(models.Model):
         return f"{self.candidate.name} → {self.score*100:.1f}%"
 
 
+class JobSearchQuota(models.Model):
+    """Last successful public job search and cached results for one account."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="job_search_quota"
+    )
+    last_search_at = models.DateTimeField(null=True, blank=True)
+    target_role = models.CharField(max_length=120, blank=True)
+    experience_level = models.CharField(max_length=20, blank=True)
+    location = models.CharField(max_length=120, blank=True)
+    results = models.JSONField(default=list, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} job search quota"
+
+
 # ============================================================================
 # MLAnalysis Model
 # ============================================================================

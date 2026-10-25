@@ -14,6 +14,7 @@ import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Profile from "./pages/Profile";
+import JobSearch from "./pages/JobSearch";
 
 function App() {
   return (
@@ -27,6 +28,14 @@ function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/about" element={<About />} />
+            <Route
+              path="/jobs"
+              element={
+                <ProtectedRoute>
+                  <JobSearch />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/upload"
               element={

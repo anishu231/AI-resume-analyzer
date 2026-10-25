@@ -19,6 +19,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard_data, name='dashboard_data'),           # All candidates
     path('dashboard/latest/', views.dashboard_latest, name='dashboard_latest'), # Latest batch only
     path('dashboard/history/', views.dashboard_history, name='dashboard_history'), # ALL history (paginated)
+    path('jobs/search/', views.job_search, name='job_search'),
     path(
     'delete-session/<str:session_id>/',
     views.delete_session,

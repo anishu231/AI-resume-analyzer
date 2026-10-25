@@ -6,6 +6,7 @@ import { FileSearch, LogOut, Menu, X } from "lucide-react";
 const LINKS = [
   { to: "/", label: "Home", end: true },
   { to: "/upload", label: "Upload", end: false },
+  { to: "/jobs", label: "Job Search", end: false },
   { to: "/dashboard", label: "Dashboard", end: false },
   { to: "/profile", label: "Profile", end: false },
   { to: "/about", label: "About", end: false },
