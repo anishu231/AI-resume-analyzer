@@ -139,7 +139,7 @@ def _run_job_search(user, role, experience_level, location):
 
     jobs = result["jobs"]
     with transaction.atomic():
-        quota = JobSearchQuota.objects.select_for_update().get(user=user)
+        quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=user)
         quota.target_role = role
         quota.experience_level = experience_level
         quota.location = location
@@ -169,7 +169,7 @@ def job_search(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def search_jobs_api(request):
-    """GET /api/search?role=&level=&location=, with the existing 24h account cap."""
+    """GET /api/search?role=&level=&location= for an authenticated account."""
     return _run_job_search(
         request.user,
         str(request.query_params.get("role", "")).strip(),
