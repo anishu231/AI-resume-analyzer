@@ -14,9 +14,12 @@ except Exception as exc:
     print(f"[WARN] Could not load en_core_web_sm ({exc}); using blank English tokenizer.")
     nlp = spacy.blank("en")
 
-# Download NLTK stopwords once (run once manually if needed)
-# import nltk; nltk.download('stopwords')
-STOPWORDS = set(stopwords.words("english"))
+# Use the NLTK corpus when available; the built-in spaCy list keeps the Space
+# runnable when optional NLTK data files are not present in the container.
+try:
+    STOPWORDS = set(stopwords.words("english"))
+except LookupError:
+    STOPWORDS = set(nlp.Defaults.stop_words)
 
 # Curated, job-relevant skills. Do not treat spaCy organization/product names,
 # job titles, degrees, or arbitrary noun phrases as skills.
