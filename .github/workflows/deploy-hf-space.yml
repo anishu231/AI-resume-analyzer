@@ -1,0 +1,29 @@
+name: Deploy to Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hugging Face CLI
+        run: |
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Upload repository to Space
+        env:
+          HF_OIDC_RESOURCE: spaces/anish321/ats-resume-analyzer
+        run: |
+          hf upload anish321/ats-resume-analyzer . . \
+            --repo-type=space \
+            --commit-message="Deploy ${GITHUB_SHA::7}"
