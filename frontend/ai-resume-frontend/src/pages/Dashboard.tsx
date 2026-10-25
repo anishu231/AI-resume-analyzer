@@ -27,6 +27,7 @@ import {
   ThumbsUp,
   AlertCircle,
   Check,
+  ChevronDown,
 } from "lucide-react";
 import type { Candidate } from "../types";
 import ResumeFeedback from "../components/ResumeFeedback";
@@ -86,6 +87,7 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(0);
   const [sortBy, setSortBy] = useState<"score-desc" | "score-asc" | "name">("score-desc");
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
+  const [expandedCandidateId, setExpandedCandidateId] = useState<number | null>(null);
 
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -465,8 +467,9 @@ export default function Dashboard() {
               const t = tier(s);
               const keys = kw(c);
               const isTop = sortBy === "score-desc" && i === 0 && !hasFilters;
+              const isExpanded = expandedCandidateId === c.id;
               return (
-                <li key={c.id ?? i} className="relative rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-100 transition hover:-translate-y-1 hover:shadow-lg">
+                <li key={c.id ?? i} className={`relative rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-100 transition ${isExpanded ? "sm:col-span-2 lg:col-span-3" : "hover:-translate-y-1 hover:shadow-lg"}`}>
                   {isTop && (
                     <span className="absolute -top-2.5 right-4 flex items-center gap-1 rounded-full bg-gradient-to-r from-yellow-400 to-amber-500 px-3 py-1 text-xs font-bold text-white shadow-md">
                       <Trophy size={12} /> Top candidate
@@ -496,12 +499,23 @@ export default function Dashboard() {
                   </div>
 
                   {c.match_report && (
-                    <details className="mt-4 border-t border-gray-100 pt-3">
-                      <summary className="cursor-pointer text-sm font-semibold text-green-700 hover:text-green-900">
-                        View detailed feedback
-                      </summary>
-                      <ResumeFeedback report={c.match_report} />
-                    </details>
+                    <div className="mt-4 border-t border-gray-100 pt-3">
+                      <button
+                        type="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={`candidate-feedback-${c.id ?? i}`}
+                        onClick={() => setExpandedCandidateId(isExpanded ? null : (c.id ?? null))}
+                        className="flex w-full items-center justify-between gap-3 text-left text-sm font-semibold text-green-700 hover:text-green-900"
+                      >
+                        <span>View detailed feedback</span>
+                        <ChevronDown size={16} className={`shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                      </button>
+                      {isExpanded && (
+                        <div id={`candidate-feedback-${c.id ?? i}`}>
+                          <ResumeFeedback report={c.match_report} />
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500">
