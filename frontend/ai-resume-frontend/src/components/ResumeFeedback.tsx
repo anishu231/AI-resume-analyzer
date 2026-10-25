@@ -89,7 +89,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
       <section>
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Bullet-point edits</h4>
         <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
-          {report.bullet_feedback.filter((item) => item.original).map((item, index) => (
+          {report.bullet_feedback.filter((item) => item.original && item.suggestion_source === "gemini" && item.suggested_version?.trim()).map((item, index) => (
             <div key={`${item.original}-${index}`} className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl border border-blue-100 bg-blue-50/60 p-3">
               {item.original && <p className="text-xs italic text-gray-700">Original: “{item.original}”</p>}
               {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).length > 0 && (
@@ -103,9 +103,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
                   <p className="text-xs leading-5 text-emerald-900">{item.suggested_version}</p>
                   <p className="mt-1 text-[11px] text-gray-500">Check that every detail is accurate before using it.</p>
                 </>
-              ) : (
-                <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">Gemini did not return a rewrite for this line. Please retry the analysis; no built-in rewrite is shown.</p>
-              )}
+              ) : null}
             </div>
           ))}
         </div>

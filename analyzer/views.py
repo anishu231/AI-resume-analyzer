@@ -46,6 +46,7 @@ def add_gemini_bullet_suggestions(report, job_description):
         item["suggested_version"] = ""
     if not api_key:
         print("[GEMINI REWRITE] GEMINI_API_KEY is not configured; AI rewrites unavailable")
+        report["bullet_feedback"] = []
         return report
 
     configured_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -55,20 +56,22 @@ def add_gemini_bullet_suggestions(report, job_description):
         if value.strip()
     ]
     models = list(dict.fromkeys([configured_model, "gemini-3.8-flash", "gemini-3.5-flash-lite", *configured_fallbacks, "gemini-2.5-flash-lite"]))
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": (
-            "You are an expert resume editor. Rewrite every supplied resume bullet as a distinct, polished achievement statement tailored to the job description. "
-            "Preserve the original meaning and every stated tool, scope, and number exactly. Never invent metrics, outcomes, tools, responsibilities, or facts. "
-            "Use a strong, accurate action verb; remove filler; improve grammar and specificity using only facts already present. "
-            "Even when a bullet is already strong, provide a genuine concise paraphrase rather than advice, a placeholder, or the original sentence. "
-            "Each result must be a rewritten resume bullet, not commentary. Return JSON only as {\"suggestions\":[\"...\"]} in the same order.\n"
-            + "Job description (context only): " + job_description[:5000] + "\nBullets: "
-            + json.dumps([item["original"][:500] for item in targets])
-        )}]}],
-        "generationConfig": {"temperature": 0.45, "responseMimeType": "application/json", "maxOutputTokens": 2000},
-    }
-
     for candidate_model in models:
+        pending = [item for item in targets if item["suggestion_source"] != "gemini"]
+        if not pending:
+            break
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": (
+                "You are an expert resume editor. Rewrite every supplied resume bullet as a distinct, polished achievement statement tailored to the job description. "
+                "Preserve the original meaning and every stated tool, scope, and number exactly. Never invent metrics, outcomes, tools, responsibilities, or facts. "
+                "Use a strong, accurate action verb; remove filler; improve grammar and specificity using only facts already present. "
+                "Even when a bullet is already strong, provide a genuine concise paraphrase rather than advice, a placeholder, or the original sentence. "
+                "Each result must be a rewritten resume bullet, not commentary. Return JSON only as {\"suggestions\":[\"...\"]} in the same order.\n"
+                + "Job description (context only): " + job_description[:5000] + "\nBullets: "
+                + json.dumps([item["original"][:500] for item in pending])
+            )}]}],
+            "generationConfig": {"temperature": 0.45, "responseMimeType": "application/json", "maxOutputTokens": 2000},
+        }
         try:
             response = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
@@ -78,9 +81,9 @@ def add_gemini_bullet_suggestions(report, job_description):
             text = "".join(part.get("text", "") for part in response.json()["candidates"][0]["content"]["parts"])
             parsed = json.loads(text)
             suggestions = parsed.get("suggestions", []) if isinstance(parsed, dict) else parsed
-            if len(suggestions) != len(targets):
+            if len(suggestions) != len(pending):
                 raise ValueError("Gemini returned an unexpected number of suggestions")
-            for item, suggestion in zip(targets, suggestions):
+            for item, suggestion in zip(pending, suggestions):
                 if not isinstance(suggestion, str) or not suggestion.strip():
                     continue
                 original = re.sub(r"[^a-z0-9]+", "", item["original"].lower())
@@ -88,11 +91,14 @@ def add_gemini_bullet_suggestions(report, job_description):
                 if rewritten and SequenceMatcher(None, original, rewritten).ratio() <= 0.92:
                     item["suggested_version"] = suggestion.strip()[:700]
                     item["suggestion_source"] = "gemini"
-            print(f"[GEMINI REWRITE] Generated {sum(item['suggestion_source'] == 'gemini' for item in targets)}/{len(targets)} bullet rewrites with {candidate_model}")
-            break
+            print(f"[GEMINI REWRITE] {candidate_model} generated {sum(item['suggestion_source'] == 'gemini' for item in targets)}/{len(targets)} bullet rewrites")
         except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
             print(f"[GEMINI REWRITE] {candidate_model} failed (HTTP {status_code or 'request/parse error'}): {exc}")
+    report["bullet_feedback"] = [
+        item for item in report.get("bullet_feedback", [])
+        if item.get("suggestion_source") == "gemini" and item.get("suggested_version")
+    ]
     return report
 # ============================================================================
 # ML PREDICTOR INITIALIZATION (Run once at server startup)
