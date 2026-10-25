@@ -107,15 +107,12 @@ def add_gemini_bullet_suggestions(report, job_description):
 
 
 def _job_search_payload(quota):
-    now = timezone.now()
     last_search_at = quota.last_search_at if quota else None
-    next_search_at = last_search_at + timedelta(hours=24) if last_search_at else None
-    retry_after = max(0, int((next_search_at - now).total_seconds())) if next_search_at else 0
     return {
-        "can_search": retry_after == 0,
+        "can_search": True,
         "last_search_at": last_search_at.isoformat() if last_search_at else None,
-        "next_search_at": next_search_at.isoformat() if next_search_at else None,
-        "retry_after": retry_after,
+        "next_search_at": None,
+        "retry_after": 0,
         "role": quota.target_role if quota else "",
         "experience_level": quota.experience_level if quota else "",
         "location": quota.location if quota else "",
@@ -124,29 +121,13 @@ def _job_search_payload(quota):
 
 
 def _run_job_search(user, role, experience_level, location):
-    """Run a valid provider search and enforce the existing per-user 24h limit."""
+    """Run a provider search without a per-user cooldown."""
     if not role or len(role) > 120:
         return Response({"error": "Enter a target role (up to 120 characters)."}, status=status.HTTP_400_BAD_REQUEST)
     if experience_level not in EXPERIENCE_LABELS:
         return Response({"error": "Choose an experience level."}, status=status.HTTP_400_BAD_REQUEST)
     if len(location) > 120:
         return Response({"error": "Location must be 120 characters or fewer."}, status=status.HTTP_400_BAD_REQUEST)
-    # Reserve the user's daily slot in a short transaction. Provider calls run
-    # after releasing this lock so parallel API workers can record their own
-    # persistent safety counters without holding a database write lock open.
-    with transaction.atomic():
-        quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=user)
-        now = timezone.now()
-        next_search_at = quota.last_search_at + timedelta(hours=24) if quota.last_search_at else None
-        if next_search_at and now < next_search_at:
-            data = _job_search_payload(quota)
-            data["error"] = "You can search for jobs once every 24 hours."
-            return Response(data, status=status.HTTP_429_TOO_MANY_REQUESTS)
-        previous_last_search_at = quota.last_search_at
-        reservation_time = timezone.now()
-        quota.last_search_at = reservation_time
-        quota.save(update_fields=["last_search_at"])
-
     try:
         result, cached = search_jobs(role, experience_level, location)
     except RuntimeError as exc:
@@ -154,12 +135,6 @@ def _run_job_search(user, role, experience_level, location):
         cached = False
 
     if result.get("all_sources_failed"):
-        # Failed providers do not consume the user's once-per-day search slot.
-        with transaction.atomic():
-            quota = JobSearchQuota.objects.select_for_update().get(user=user)
-            if quota.last_search_at == reservation_time:
-                quota.last_search_at = previous_last_search_at
-                quota.save(update_fields=["last_search_at"])
         return Response({"error": result.get("error") or "All job sources are temporarily unavailable. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
 
     jobs = result["jobs"]
@@ -169,6 +144,7 @@ def _run_job_search(user, role, experience_level, location):
         quota.experience_level = experience_level
         quota.location = location
         quota.results = jobs
+        quota.last_search_at = timezone.now()
         quota.save(update_fields=["last_search_at", "target_role", "experience_level", "location", "results"])
         data = _job_search_payload(quota)
         data["source_errors"] = result.get("source_errors", [])

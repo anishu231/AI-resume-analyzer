@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, BriefcaseBusiness, Building2, Clock3, ExternalLink, Info, LoaderCircle, MapPin, Search, X } from "lucide-react";
+import { ArrowRight, BriefcaseBusiness, Building2, ExternalLink, Info, LoaderCircle, MapPin, Search, X } from "lucide-react";
 
 const API = "https://anish321-ats-resume-analyzer.hf.space/api/jobs/search/";
 const SEARCH_API = "https://anish321-ats-resume-analyzer.hf.space/api/search/";
@@ -41,8 +41,6 @@ export default function JobSearch() {
   const [location, setLocation] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [lastSearchAt, setLastSearchAt] = useState<string | null>(null);
-  const [nextSearchAt, setNextSearchAt] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
@@ -50,11 +48,6 @@ export default function JobSearch() {
   const [showInfo, setShowInfo] = useState(false);
 
   const token = () => localStorage.getItem("access") || "";
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 15000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -76,18 +69,12 @@ export default function JobSearch() {
     setJobs(data.jobs || []);
     setSourceErrors(data.source_errors || []);
     setLastSearchAt(data.last_search_at);
-    setNextSearchAt(data.next_search_at);
     if (data.role) setRole(data.role);
     if (data.experience_level) setExperienceLevel(data.experience_level);
     if (data.location) setLocation(data.location);
   };
 
-  const remainingMs = useMemo(
-    () => Math.max(0, nextSearchAt ? new Date(nextSearchAt).getTime() - now : 0),
-    [nextSearchAt, now]
-  );
-  const remainingHours = Math.ceil(remainingMs / 3_600_000);
-  const canSearch = !loading && !searching && remainingMs === 0 && role.trim().length >= 2;
+  const canSearch = !loading && !searching && role.trim().length >= 2;
 
   const searchJobs = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -149,15 +136,9 @@ export default function JobSearch() {
             <div className="md:col-span-2">
               <button type="submit" disabled={!canSearch} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto">
                 {searching || loading ? <LoaderCircle size={18} className="animate-spin" /> : <Search size={18} />}
-                {searching ? "Searching company career pages…" : loading ? "Loading search limit…" : "Search jobs"}
+                {searching ? "Searching company career pages…" : loading ? "Loading search status…" : "Search jobs"}
               </button>
-              {remainingMs > 0 && (
-                <p className="mt-3 flex items-center gap-2 text-xs text-amber-800">
-                  <Clock3 size={14} /> Your next search is available {nextSearchAt ? `on ${new Date(nextSearchAt).toLocaleString()}` : `in about ${remainingHours} hour(s)`}.
-                </p>
-              )}
-              {lastSearchAt && remainingMs === 0 && <p className="mt-3 text-xs text-slate-500">Your 24-hour search limit has reset. Last searched {new Date(lastSearchAt).toLocaleString()}.</p>}
-              <p className="mt-3 text-xs leading-5 text-slate-500">One search per account every 24 hours. Results are restricted to company career pages and verified company-hosted job links.</p>
+              <p className="mt-3 text-xs leading-5 text-slate-500">Search as needed. Results are restricted to company career pages and verified company-hosted job links.</p>
             </div>
           </form>
         </section>
@@ -202,7 +183,7 @@ export default function JobSearch() {
           ) : !loading && lastSearchAt ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
               <p className="font-semibold text-slate-800">Koi job nahi mili.</p>
-              <p className="mt-2 text-sm text-slate-600">Try a broader role or location after your 24-hour search limit resets.</p>
+              <p className="mt-2 text-sm text-slate-600">Try a broader role or location.</p>
             </div>
           ) : null}
         </section>
