@@ -638,7 +638,7 @@ export default function UploadPage() {
                   <CheckCircle size={18} className="text-green-600" />
                   {results.success.length} resume{results.success.length > 1 ? "s" : ""} analysed
                 </p>
-                <ul className="grid gap-4 sm:grid-cols-2">
+                <ul className="grid gap-4">
                   {results.success.map((c, i) => {
                     const score = Math.round(Number(c.score) || 0);
                     const meta = scoreMeta(score);

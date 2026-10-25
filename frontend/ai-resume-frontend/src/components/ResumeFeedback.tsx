@@ -102,9 +102,9 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
 
       <section>
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Job requirements and resume evidence</h4>
-        <div className="space-y-2">
+        <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
           {report.requirement_matches.map((item, index) => (
-            <div key={`${item.requirement}-${index}`} className="rounded-xl bg-gray-50 p-3">
+            <div key={`${item.requirement}-${index}`} className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl bg-gray-50 p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <p className="min-w-0 flex-1 text-xs font-medium leading-5 text-gray-800">{item.requirement}</p>
                 <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-gray-600">{item.status} · {item.fit}%</span>
@@ -117,9 +117,9 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
 
       <section>
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Bullet-point edits</h4>
-        <div className="space-y-2">
+        <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
           {report.bullet_feedback.map((item, index) => (
-            <div key={`${item.original}-${index}`} className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+            <div key={`${item.original}-${index}`} className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl border border-blue-100 bg-blue-50/60 p-3">
               {item.original && <p className="text-xs italic text-gray-700">Original: “{item.original}”</p>}
               {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).length > 0 && (
                 <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-900">
