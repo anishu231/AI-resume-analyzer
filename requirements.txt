@@ -24,3 +24,5 @@ docx2txt>=0.8
 psycopg2-binary>=2.9
 dj-database-url>=2.0
 gunicorn>=21.2
+requests>=2.31
+python-dotenv>=1.0

@@ -1,10 +1,17 @@
-"""Grounded job search, restricted to links on employers' career sites."""
+"""Fetch, normalize, cache, and filter jobs from public job APIs."""
+import hashlib
 import json
 import os
 import re
-from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone as datetime_timezone
+from pathlib import Path
 
 import requests
+from django.core.cache import cache
+from django.db import transaction
+
+from .models import JobSearchProviderUsage
 
 
 EXPERIENCE_LABELS = {
@@ -12,160 +19,255 @@ EXPERIENCE_LABELS = {
     "mid": "Mid-level (2-10 years)",
     "senior": "Senior-level (10+ years)",
 }
+COMPANIES_FILE = Path(__file__).with_name("companies.json")
+CACHE_SECONDS = 30 * 60
+MAX_RESULTS_PER_SOURCE = 40
+REQUEST_TIMEOUT = 12
 
-ATS_HOSTS = (
-    "boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.lever.co",
-    "jobs.ashbyhq.com", "myworkdayjobs.com", "careers.smartrecruiters.com",
-    "jobs.jobvite.com", "jobs.workable.com", "jobs.personio.com",
-    "jobs.icims.com", "jobs.bamboohr.com", "applytojob.com",
-)
-CAREER_MARKERS = ("career", "jobs", "job", "opening", "workday", "greenhouse", "lever.co", "ashbyhq")
-
-
-def _normal_url(url):
-    parsed = urlparse(url.strip())
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return None
-    return parsed.hostname.lower().removeprefix("www."), parsed.path.rstrip("/") or "/"
+ENTRY_TERMS = ("junior", "associate", "intern", "internship", "fresher", "graduate", "entry level", "trainee")
+SENIOR_TERMS = ("senior", "lead", "manager", "principal", "staff", "director", "head of")
 
 
-def _company_tokens(company):
-    tokens = [re.sub(r"[^a-z0-9]", "", word.lower()) for word in company.split()]
-    return [token for token in tokens if len(token) >= 3]
-
-
-def _company_matches_url(company, host, path, hosted_ats):
-    searchable = re.sub(r"[^a-z0-9]", "", (path if hosted_ats else host).lower())
-    return any(token in searchable for token in _company_tokens(company))
-
-
-def _is_official_career_url(company, url):
-    normalized = _normal_url(url)
-    if not normalized:
-        return False
-    host, path = normalized
-    host_is_ats = any(host == domain or host.endswith("." + domain) for domain in ATS_HOSTS)
-    path_has_job = any(marker in f"{host}/{path}".lower() for marker in CAREER_MARKERS)
-    company_match = _company_matches_url(company, host, path, host_is_ats)
-    return path_has_job and company_match
-
-
-def _extract_json(text):
-    cleaned = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text, flags=re.I)
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("Gemini did not return a JSON object")
-    return json.loads(cleaned[start:end + 1])
-
-
-def _provider_error(response):
-    """Return a short, credential-free Gemini error for logs and the UI."""
+def _reserve_provider_call(source, key_material, bucket, limit_name, default_limit):
+    """Persist a conservative provider call cap before contacting a paid API."""
     try:
-        payload = response.json()
-        message = payload.get("error", {}).get("message", "")
-        code = payload.get("error", {}).get("status", "")
-    except (ValueError, AttributeError):
-        message, code = "", ""
-    message = re.sub(r"AIza[\w-]{20,}", "[redacted]", str(message))[:240]
-    detail = f"HTTP {response.status_code}"
-    if code:
-        detail += f" {code}"
-    if message:
-        detail += f": {message}"
-    return detail
+        limit = max(0, int(os.environ.get(limit_name, default_limit)))
+    except (TypeError, ValueError):
+        limit = default_limit
+    key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:16]
+    usage_bucket = f"{bucket}:{key_hash}"
+    with transaction.atomic():
+        usage, _ = JobSearchProviderUsage.objects.select_for_update().get_or_create(
+            source=source, bucket=usage_bucket,
+        )
+        if usage.calls >= limit:
+            raise RuntimeError(f"{source.title()} safety limit reached ({limit} calls for this period/key).")
+        usage.calls += 1
+        usage.save(update_fields=["calls"])
 
 
-def find_official_jobs(role, experience_level, location=""):
-    api_key = os.environ.get("JOB_SEARCH_GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("Job search is not configured yet. Add JOB_SEARCH_GEMINI_API_KEY in Space secrets.")
+def _companies():
+    try:
+        payload = json.loads(COMPANIES_FILE.read_text(encoding="utf-8"))
+        return [item for item in payload if isinstance(item, dict) and item.get("name") and item.get("ats") and item.get("token")]
+    except (OSError, ValueError, TypeError):
+        print("[JOB SEARCH] companies.json could not be loaded")
+        return []
 
-    level = EXPERIENCE_LABELS[experience_level]
-    location_text = location.strip() or "Any location; include remote roles"
-    prompt = (
-        "Search the live web for current job openings matching the target role, experience level, and location. "
-        "Return only openings posted on the hiring company's own careers domain or its official applicant-tracking page. "
-        "Never return LinkedIn, Indeed, Glassdoor, job-board, staffing, or scraped aggregator pages. "
-        "Do not invent a job, company, requirement, location, or URL. Include a result only when its exact job-detail URL appears in your Google Search grounding sources. "
-        "If you cannot verify a company-hosted job-detail page, omit that result. Return at most 8 newest/relevant results. "
-        "Return JSON only: {\"jobs\":[{\"company\":\"...\",\"title\":\"...\",\"location\":\"...\",\"experience_evidence\":\"...\",\"summary\":\"...\",\"url\":\"exact source URL\"}]}. "
-        f"Target role: {role}. Target experience: {level}. Location: {location_text}."
-    )
 
-    configured_model = os.environ.get("JOB_SEARCH_GEMINI_MODEL", "gemini-3.8-flash").strip()
-    models = list(dict.fromkeys([
-        configured_model,
-        "gemini-3.8-flash",
-        "gemini-3.5-flash-lite",
-    ]))
-    errors = []
-    for model in models:
+def _clean(value, limit=500):
+    if not value:
+        return ""
+    value = re.sub(r"<[^>]+>", " ", str(value))
+    return re.sub(r"\s+", " ", value).strip()[:limit]
+
+
+def _level(title):
+    normalized = re.sub(r"[^a-z0-9]+", " ", title.lower())
+    if any(term in normalized for term in ENTRY_TERMS):
+        return "entry"
+    if any(term in normalized for term in SENIOR_TERMS):
+        return "senior"
+    return "mid"
+
+
+def _role_matches(role, title, description=""):
+    synonyms = {"developer": "engineer", "developers": "engineer", "engineers": "engineer"}
+    required = {synonyms.get(word, word) for word in re.findall(r"[a-z0-9+#.]+", role.lower())}
+    searchable = {synonyms.get(word, word) for word in re.findall(r"[a-z0-9+#.]+", f"{title} {description}".lower())}
+    return not required or required.issubset(searchable)
+
+
+def _location_matches(location_filter, location):
+    if not location_filter:
+        return True
+    wanted = location_filter.casefold().strip()
+    actual = (location or "").casefold()
+    return wanted in actual or ("remote" in wanted and "remote" in actual)
+
+
+def _company_key(value):
+    words = re.findall(r"[a-z0-9]+", (value or "").casefold())
+    while words and words[-1] in {"inc", "incorporated", "ltd", "limited", "plc", "corp", "corporation", "company", "co"}:
+        words.pop()
+    return "".join(words)
+
+
+def _posted(value):
+    if not value:
+        return ""
+    if isinstance(value, (int, float)):
         try:
-            response = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={"x-goog-api-key": api_key},
-                json={
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "tools": [{"google_search": {}}],
-                    "generationConfig": {
-                        "temperature": 0.2,
-                        "responseMimeType": "application/json",
-                        "maxOutputTokens": 3500,
-                    },
-                },
-                timeout=45,
-            )
-            if not response.ok:
-                detail = _provider_error(response)
-                errors.append(f"{model}: {detail}")
-                print(f"[JOB SEARCH] {model} rejected the request ({detail})")
-                # Auth, access, and quota failures are not fixed by changing models.
-                if response.status_code in (401, 403, 429):
-                    break
-                continue
-            candidate = response.json()["candidates"][0]
-            text = "".join(part.get("text", "") for part in candidate.get("content", {}).get("parts", []))
-            raw_jobs = _extract_json(text).get("jobs", [])
-            chunks = candidate.get("groundingMetadata", {}).get("groundingChunks", [])
-            grounded_sources = {}
-            for chunk in chunks:
-                web = chunk.get("web", {})
-                url = web.get("uri", "")
-                normalized = _normal_url(url)
-                if normalized:
-                    grounded_sources[normalized] = {"url": url, "title": web.get("title", "Company careers page")}
+            timestamp = value / 1000 if value > 100_000_000_000 else value
+            return datetime.fromtimestamp(timestamp, tz=datetime_timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime_timezone.utc)
+        return parsed.isoformat()
+    except ValueError:
+        for pattern in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text[:19], pattern).replace(tzinfo=datetime_timezone.utc).isoformat()
+            except ValueError:
+                pass
+    return ""
 
-            verified = []
-            seen_urls = set()
-            for item in raw_jobs:
-                if not isinstance(item, dict):
-                    continue
-                company = str(item.get("company", "")).strip()[:120]
-                title = str(item.get("title", "")).strip()[:180]
-                normalized = _normal_url(str(item.get("url", "")))
-                source = grounded_sources.get(normalized)
-                if not company or not title or not source or normalized in seen_urls:
-                    continue
-                if not _is_official_career_url(company, source["url"]):
-                    continue
-                seen_urls.add(normalized)
-                verified.append({
-                    "company": company,
-                    "title": title,
-                    "location": str(item.get("location", "Not specified"))[:160],
-                    "experience_evidence": str(item.get("experience_evidence", ""))[:300],
-                    "summary": str(item.get("summary", ""))[:600],
-                    "url": source["url"],
-                    "source_title": source["title"][:180],
-                })
-                if len(verified) == 8:
-                    break
-            print(f"[JOB SEARCH] {model} returned {len(verified)} verified official-career listings")
-            return verified
-        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
-            detail = str(exc).replace(api_key, "[redacted]")[:240] or "invalid Gemini response"
-            errors.append(f"{model}: {detail}")
-            print(f"[JOB SEARCH] {model} failed ({detail})")
 
-    detail = errors[-1] if errors else "No Gemini model returned a response."
-    raise RuntimeError(f"Gemini job search failed. {detail}")
+def _job(title, company, location, url, posted, source, description=""):
+    title = _clean(title, 180)
+    company = _clean(company, 120)
+    location = _clean(location, 160) or "Not specified"
+    url = str(url or "").strip()
+    if not title or not company or not url.startswith(("https://", "http://")):
+        return None
+    return {
+        "title": title,
+        "company": company,
+        "location": location,
+        "url": url,
+        "posted": _posted(posted),
+        "level": _level(title),
+        "source": source,
+        "_description": _clean(description, 1500),
+    }
+
+
+def _safe_error(exc):
+    """Provider error text must never leak keys embedded in request URLs."""
+    detail = str(exc)
+    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY"):
+        secret = os.environ.get(name, "").strip()
+        if secret:
+            detail = detail.replace(secret, "[redacted]")
+    detail = re.sub(r"([?&](?:app_id|app_key)=)[^&\s]+", r"\1[redacted]", detail, flags=re.I)
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        detail = f"HTTP {exc.response.status_code}"
+        try:
+            provider_message = exc.response.json().get("error", {}).get("message", "")
+            if provider_message:
+                detail += ": " + str(provider_message)[:180]
+        except (ValueError, AttributeError):
+            pass
+    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY"):
+        secret = os.environ.get(name, "").strip()
+        if secret:
+            detail = detail.replace(secret, "[redacted]")
+    return detail[:240] or exc.__class__.__name__
+
+
+def _greenhouse(company, role, level, location):
+    response = requests.get(
+        f"https://boards-api.greenhouse.io/v1/boards/{company['token']}/jobs",
+        params={"content": "true"}, timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    jobs = []
+    for item in response.json().get("jobs", []):
+        content = item.get("content", "")
+        job = _job(item.get("title"), company["name"], (item.get("location") or {}).get("name"), item.get("absolute_url"), item.get("updated_at"), "greenhouse", content)
+        if job and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+            jobs.append(job)
+    return jobs
+
+
+def _lever(company, role, level, location):
+    response = requests.get(
+        f"https://api.lever.co/v0/postings/{company['token']}",
+        params={"mode": "json"}, timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    jobs = []
+    for item in response.json():
+        categories = item.get("categories") or {}
+        job = _job(item.get("text"), company["name"], categories.get("location") or ", ".join(categories.get("allLocations") or []), item.get("applyUrl") or item.get("hostedUrl"), item.get("createdAt"), "lever", item.get("descriptionPlain") or item.get("openingPlain"))
+        if job and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+            jobs.append(job)
+    return jobs
+
+
+def _adzuna(role, level, location):
+    app_id = os.environ.get("ADZUNA_APP_ID", "").strip()
+    app_key = os.environ.get("ADZUNA_APP_KEY", "").strip()
+    if not app_id or not app_key:
+        raise RuntimeError("Adzuna is not configured (ADZUNA_APP_ID / ADZUNA_APP_KEY).")
+    day = datetime.now(datetime_timezone.utc).date().isoformat()
+    _reserve_provider_call("adzuna", f"{app_id}:{app_key}", day, "ADZUNA_DAILY_JOB_SEARCH_LIMIT", 200)
+    params = {"app_id": app_id, "app_key": app_key, "results_per_page": MAX_RESULTS_PER_SOURCE, "what": role}
+    if location:
+        params["where"] = location
+    response = requests.get("https://api.adzuna.com/v1/api/jobs/in/search/1", params=params, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    return [job for item in response.json().get("results", []) if (job := _job(item.get("title"), (item.get("company") or {}).get("display_name"), (item.get("location") or {}).get("display_name"), item.get("redirect_url"), item.get("created"), "adzuna", item.get("description"))) and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+
+
+def _jooble(role, level, location):
+    api_key = os.environ.get("JOOBLE_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Jooble India is not configured (JOOBLE_KEY).")
+    _reserve_provider_call("jooble", api_key, "lifetime", "JOOBLE_LIFETIME_JOB_SEARCH_LIMIT", 450)
+    payload = {"keywords": role, "location": location or "India", "page": "1", "ResultOnPage": MAX_RESULTS_PER_SOURCE, "companysearch": "false"}
+    response = requests.post(f"https://in.jooble.org/api/{api_key}", json=payload, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+
+
+def _fetch_all(role, level, location):
+    companies = _companies()
+    jobs, errors = [], []
+    tasks = []
+    for company in companies:
+        if company["ats"].lower() == "greenhouse":
+            tasks.append((f"Greenhouse/{company['name']}", lambda company=company: _greenhouse(company, role, level, location)))
+        elif company["ats"].lower() == "lever":
+            tasks.append((f"Lever/{company['name']}", lambda company=company: _lever(company, role, level, location)))
+    tasks.extend([
+        ("Adzuna", lambda: _adzuna(role, level, location)),
+        ("Jooble", lambda: _jooble(role, level, location)),
+    ])
+    with ThreadPoolExecutor(max_workers=min(12, max(1, len(tasks)))) as pool:
+        futures = {pool.submit(fn): source for source, fn in tasks}
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                jobs.extend(future.result())
+            except Exception as exc:
+                detail = _safe_error(exc)
+                errors.append(source)
+                print(f"[JOB SEARCH] {source} failed: {detail}")
+
+    allowed_public_companies = {_company_key(company["name"]) for company in companies}
+    jobs = [
+        job for job in jobs
+        if job["source"] in ("greenhouse", "lever")
+        or _company_key(job["company"]) in allowed_public_companies
+    ]
+    unique, seen = [], set()
+    for job in jobs:
+        key = (re.sub(r"[^a-z0-9]", "", job["title"].casefold()), re.sub(r"[^a-z0-9]", "", job["company"].casefold()))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(job)
+    unique.sort(key=lambda item: item["posted"] or "", reverse=True)
+    for job in unique:
+        job.pop("_description", None)
+    return unique, errors, len(tasks)
+
+
+def search_jobs(role, level, location=""):
+    cache_material = "|".join((role.strip().casefold(), level, location.strip().casefold()))
+    cache_key = "job-search:" + hashlib.sha256(cache_material.encode("utf-8")).hexdigest()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached, True
+    jobs, errors, source_count = _fetch_all(role.strip(), level, location.strip())
+    result = {"jobs": jobs, "source_errors": errors, "all_sources_failed": source_count > 0 and len(errors) == source_count}
+    if not result["all_sources_failed"]:
+        cache.set(cache_key, result, CACHE_SECONDS)
+    return result, False

@@ -1,8 +1,10 @@
 from pathlib import Path
 import os
 import dj_database_url
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # SECURITY
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-local-dev-only')
@@ -28,6 +30,16 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+}
+
+# Short-lived job API response cache. A shared cache service can replace this
+# in multi-worker deployments without changing the search code.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "ats-resume-analyzer-cache",
+        "TIMEOUT": 1800,
+    }
 }
 from datetime import timedelta
 

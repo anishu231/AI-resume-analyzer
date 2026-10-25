@@ -4,15 +4,17 @@ import { Link } from "react-router-dom";
 import { ArrowRight, BriefcaseBusiness, Building2, Clock3, ExternalLink, Info, LoaderCircle, MapPin, Search, X } from "lucide-react";
 
 const API = "https://anish321-ats-resume-analyzer.hf.space/api/jobs/search/";
+const SEARCH_API = "https://anish321-ats-resume-analyzer.hf.space/api/search/";
 
 type Job = {
   company: string;
   title: string;
   location: string;
-  experience_evidence: string;
-  summary: string;
   url: string;
-  source_title: string;
+  posted: string;
+  level: string;
+  source?: "greenhouse" | "lever" | "adzuna" | "jooble";
+  source_title?: string;
 };
 
 type SearchState = {
@@ -24,6 +26,7 @@ type SearchState = {
   experience_level: string;
   location: string;
   jobs: Job[];
+  source_errors?: string[];
 };
 
 const LEVELS = [
@@ -43,6 +46,7 @@ export default function JobSearch() {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
+  const [sourceErrors, setSourceErrors] = useState<string[]>([]);
   const [showInfo, setShowInfo] = useState(false);
 
   const token = () => localStorage.getItem("access") || "";
@@ -70,6 +74,7 @@ export default function JobSearch() {
 
   const applySearchState = (data: SearchState) => {
     setJobs(data.jobs || []);
+    setSourceErrors(data.source_errors || []);
     setLastSearchAt(data.last_search_at);
     setNextSearchAt(data.next_search_at);
     if (data.role) setRole(data.role);
@@ -90,13 +95,9 @@ export default function JobSearch() {
     setSearching(true);
     setError("");
     try {
-      const response = await fetch(API, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ role: role.trim(), experience_level: experienceLevel, location: location.trim() }),
+      const query = new URLSearchParams({ role: role.trim(), level: experienceLevel, location: location.trim() });
+      const response = await fetch(`${SEARCH_API}?${query.toString()}`, {
+        headers: { Authorization: `Bearer ${token()}` },
       });
       const data = await response.json();
       if (!response.ok) {
@@ -161,16 +162,17 @@ export default function JobSearch() {
           </form>
         </section>
 
-        {error && <p role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
-
         <section className="mt-8">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="text-xl font-bold text-slate-950">Company career listings</h2>
-              <p className="mt-1 text-sm text-slate-600">{jobs.length ? `${jobs.length} verified result${jobs.length === 1 ? "" : "s"}` : "Only official company and company-hosted career links are shown."}</p>
+              <p className="mt-1 text-sm text-slate-600">{jobs.length ? `${jobs.length} result${jobs.length === 1 ? "" : "s"} from company pages and labeled job sources` : "Company career pages and labeled job sources are searched."}</p>
             </div>
             {lastSearchAt && <span className="text-xs text-slate-500">Search saved {new Date(lastSearchAt).toLocaleString()}</span>}
           </div>
+
+          {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
+          {sourceErrors.length > 0 && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">Some job sources did not respond ({sourceErrors.join(", ")}); results from available sources are shown.</p>}
 
           {jobs.length > 0 ? (
             <div className="grid gap-4 lg:grid-cols-2">
@@ -181,21 +183,26 @@ export default function JobSearch() {
                       <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-emerald-700"><Building2 size={14} />{job.company}</p>
                       <h3 className="mt-2 text-lg font-bold leading-6 text-slate-900">{job.title}</h3>
                     </div>
-                    <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">Official listing</span>
+                    {job.source === "greenhouse" || job.source === "lever" || job.source_title ? (
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">Company career page</span>
+                    ) : job.source === "adzuna" ? (
+                      <a href="https://www.adzuna.in/" target="_blank" rel="noopener noreferrer" aria-label="Jobs by Adzuna" className="inline-flex h-[23px] min-w-[116px] shrink-0 items-center justify-center gap-1 rounded-full bg-slate-100 px-2 text-[10px] font-semibold text-slate-700"><span>Jobs by</span><img src="https://zunastatic-abf.kxcdn.com/images/global/adzuna_logo.svg" alt="Adzuna" className="h-[17px] w-[58px] object-contain" /></a>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">via Jooble</span>
+                    )}
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
-                  {job.experience_evidence && <p className="mt-2 text-xs text-slate-600"><span className="font-semibold">Experience:</span> {job.experience_evidence}</p>}
-                  {job.summary && <p className="mt-3 text-sm leading-6 text-slate-700">{job.summary}</p>}
+                  <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
                   <a href={job.url} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
-                    View on {job.source_title || "company careers page"} <ExternalLink size={15} />
+                    Apply <ExternalLink size={15} />
                   </a>
                 </article>
               ))}
             </div>
           ) : !loading && lastSearchAt ? (
             <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-              <p className="font-semibold text-slate-800">No verifiable company-career listings found for this search.</p>
-              <p className="mt-2 text-sm text-slate-600">Try again after your 24-hour limit resets, or broaden the role/location next time.</p>
+              <p className="font-semibold text-slate-800">Koi job nahi mili.</p>
+              <p className="mt-2 text-sm text-slate-600">Try a broader role or location after your 24-hour search limit resets.</p>
             </div>
           ) : null}
         </section>

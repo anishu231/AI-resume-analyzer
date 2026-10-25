@@ -35,7 +35,7 @@ from datetime import timedelta
 from django.db import transaction
 from difflib import SequenceMatcher
 from .models import JobSearchQuota
-from .job_search import EXPERIENCE_LABELS, find_official_jobs
+from .job_search import EXPERIENCE_LABELS, search_jobs
 
 
 def add_gemini_bullet_suggestions(report, job_description):
@@ -106,69 +106,100 @@ def add_gemini_bullet_suggestions(report, job_description):
     return report
 
 
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def job_search(request):
-    """Search public employer career listings, at most once per user per 24h."""
-    quota = JobSearchQuota.objects.filter(user=request.user).first()
+def _job_search_payload(quota):
     now = timezone.now()
+    last_search_at = quota.last_search_at if quota else None
+    next_search_at = last_search_at + timedelta(hours=24) if last_search_at else None
+    retry_after = max(0, int((next_search_at - now).total_seconds())) if next_search_at else 0
+    return {
+        "can_search": retry_after == 0,
+        "last_search_at": last_search_at.isoformat() if last_search_at else None,
+        "next_search_at": next_search_at.isoformat() if next_search_at else None,
+        "retry_after": retry_after,
+        "role": quota.target_role if quota else "",
+        "experience_level": quota.experience_level if quota else "",
+        "location": quota.location if quota else "",
+        "jobs": quota.results if quota else [],
+    }
 
-    def quota_data(record):
-        last_search_at = record.last_search_at if record else None
-        next_search_at = last_search_at + timedelta(hours=24) if last_search_at else None
-        retry_after = max(0, int((next_search_at - now).total_seconds())) if next_search_at else 0
-        return {
-            "can_search": retry_after == 0,
-            "last_search_at": last_search_at.isoformat() if last_search_at else None,
-            "next_search_at": next_search_at.isoformat() if next_search_at else None,
-            "retry_after": retry_after,
-            "role": record.target_role if record else "",
-            "experience_level": record.experience_level if record else "",
-            "location": record.location if record else "",
-            "jobs": record.results if record else [],
-        }
 
-    if request.method == "GET":
-        return Response(quota_data(quota), status=status.HTTP_200_OK)
-
-    role = str(request.data.get("role", "")).strip()
-    experience_level = str(request.data.get("experience_level", "")).strip().lower()
-    location = str(request.data.get("location", "")).strip()
+def _run_job_search(user, role, experience_level, location):
+    """Run a valid provider search and enforce the existing per-user 24h limit."""
     if not role or len(role) > 120:
         return Response({"error": "Enter a target role (up to 120 characters)."}, status=status.HTTP_400_BAD_REQUEST)
     if experience_level not in EXPERIENCE_LABELS:
         return Response({"error": "Choose an experience level."}, status=status.HTTP_400_BAD_REQUEST)
     if len(location) > 120:
         return Response({"error": "Location must be 120 characters or fewer."}, status=status.HTTP_400_BAD_REQUEST)
-    if not os.environ.get("JOB_SEARCH_GEMINI_API_KEY", "").strip():
-        return Response({"error": "Job search is not configured yet. Add JOB_SEARCH_GEMINI_API_KEY to the Space secrets."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-    # Hold the per-user row lock through the search so concurrent requests from
-    # different tabs/devices cannot both pass the 24-hour check.
+    # Reserve the user's daily slot in a short transaction. Provider calls run
+    # after releasing this lock so parallel API workers can record their own
+    # persistent safety counters without holding a database write lock open.
     with transaction.atomic():
-        quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=request.user)
+        quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=user)
         now = timezone.now()
         next_search_at = quota.last_search_at + timedelta(hours=24) if quota.last_search_at else None
         if next_search_at and now < next_search_at:
-            retry_after = max(1, int((next_search_at - now).total_seconds()))
-            data = quota_data(quota)
+            data = _job_search_payload(quota)
             data["error"] = "You can search for jobs once every 24 hours."
             return Response(data, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        previous_last_search_at = quota.last_search_at
+        reservation_time = timezone.now()
+        quota.last_search_at = reservation_time
+        quota.save(update_fields=["last_search_at"])
 
-        try:
-            jobs = find_official_jobs(role, experience_level, location)
-        except RuntimeError as exc:
-            message = str(exc)
-            error_status = status.HTTP_503_SERVICE_UNAVAILABLE if "not configured" in message else status.HTTP_502_BAD_GATEWAY
-            return Response({"error": message}, status=error_status)
+    try:
+        result, cached = search_jobs(role, experience_level, location)
+    except RuntimeError as exc:
+        result = {"error": str(exc), "all_sources_failed": True}
+        cached = False
 
-        quota.last_search_at = timezone.now()
+    if result.get("all_sources_failed"):
+        # Failed providers do not consume the user's once-per-day search slot.
+        with transaction.atomic():
+            quota = JobSearchQuota.objects.select_for_update().get(user=user)
+            if quota.last_search_at == reservation_time:
+                quota.last_search_at = previous_last_search_at
+                quota.save(update_fields=["last_search_at"])
+        return Response({"error": result.get("error") or "All job sources are temporarily unavailable. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    jobs = result["jobs"]
+    with transaction.atomic():
+        quota = JobSearchQuota.objects.select_for_update().get(user=user)
         quota.target_role = role
         quota.experience_level = experience_level
         quota.location = location
         quota.results = jobs
         quota.save(update_fields=["last_search_at", "target_role", "experience_level", "location", "results"])
-        return Response(quota_data(quota), status=status.HTTP_200_OK)
+        data = _job_search_payload(quota)
+        data["source_errors"] = result.get("source_errors", [])
+        data["cached"] = cached
+        return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def job_search(request):
+    """Preserve the original status endpoint and POST contract."""
+    if request.method == "GET":
+        return Response(_job_search_payload(JobSearchQuota.objects.filter(user=request.user).first()))
+    return _run_job_search(
+        request.user,
+        str(request.data.get("role", "")).strip(),
+        str(request.data.get("experience_level", "")).strip().lower(),
+        str(request.data.get("location", "")).strip(),
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def search_jobs_api(request):
+    """GET /api/search?role=&level=&location=, with the existing 24h account cap."""
+    return _run_job_search(
+        request.user,
+        str(request.query_params.get("role", "")).strip(),
+        str(request.query_params.get("level", "")).strip().lower(),
+        str(request.query_params.get("location", "")).strip(),
+    )
 # ============================================================================
 # ML PREDICTOR INITIALIZATION (Run once at server startup)
 # ============================================================================

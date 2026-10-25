@@ -114,6 +114,18 @@ class JobSearchQuota(models.Model):
         return f"{self.user.username} job search quota"
 
 
+class JobSearchProviderUsage(models.Model):
+    """Provider-call safety counters, independent of individual user searches."""
+    source = models.CharField(max_length=20)
+    bucket = models.CharField(max_length=48)
+    calls = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["source", "bucket"], name="unique_job_search_provider_bucket"),
+        ]
+
+
 # ============================================================================
 # MLAnalysis Model
 # ============================================================================
