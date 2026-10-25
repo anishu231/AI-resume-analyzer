@@ -1,3 +1,13 @@
+---
+title: ATS Resume Analyzer
+emoji: 📄
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # AI Resume Analyzer
 
 ## Email verification for new accounts
