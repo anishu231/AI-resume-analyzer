@@ -18,8 +18,8 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
   const repetition = report.repetition_checks;
 
   return (
-    <div className="mt-4 space-y-5 rounded-2xl border border-gray-200 bg-white p-4 text-left sm:p-5">
-      <div>
+    <div className="mt-4 overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-left sm:p-5">
+      <div className="mb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-bold text-gray-900">Detailed resume feedback</h3>
           <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-800">
@@ -29,7 +29,8 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         <p className="mt-1 text-xs leading-5 text-gray-500">{report.method}</p>
       </div>
 
-      <section>
+      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
+      <section className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl bg-gray-50 p-3">
         <h4 className="mb-3 text-sm font-semibold text-gray-800">Score breakdown</h4>
         <div className="space-y-3">
           {Object.entries(report.component_scores).map(([key, score]) => (
@@ -49,7 +50,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         <p className="mt-2 text-[11px] text-gray-500">Analysis confidence: {report.confidence}</p>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2">
+      <section className="grid w-[min(82vw,360px)] shrink-0 snap-start gap-4 rounded-xl bg-gray-50 p-3 sm:grid-cols-2">
         <div>
           <h4 className="mb-2 text-sm font-semibold text-green-800">Relevant job skills found</h4>
           <div className="flex flex-wrap gap-1.5">
@@ -71,7 +72,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         </div>
       </section>
 
-      <section>
+      <section className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl bg-gray-50 p-3">
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Job requirements and resume evidence</h4>
         <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
           {report.requirement_matches.map((item, index) => (
@@ -86,7 +87,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         </div>
       </section>
 
-      <section>
+      <section className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl bg-gray-50 p-3">
         <h4 className="mb-2 text-sm font-semibold text-gray-800">Bullet-point edits</h4>
         <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2">
           {report.bullet_feedback.filter((item) => item.original && item.suggestion_source === "gemini" && item.suggested_version?.trim()).map((item, index) => (
@@ -109,7 +110,7 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         </div>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2">
+      <section className="grid w-[min(82vw,360px)] shrink-0 snap-start gap-4 rounded-xl bg-gray-50 p-3 sm:grid-cols-2">
         <div>
           <h4 className="mb-2 text-sm font-semibold text-gray-800">Repeated content check</h4>
           <ul className="space-y-1 text-xs text-gray-600">
@@ -127,10 +128,14 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
         </div>
       </section>
 
-      <ul className="list-disc space-y-1 pl-4 text-xs text-gray-700">
-        {report.strengths.map((strength) => <li key={strength}>{strength}</li>)}
-      </ul>
-      <p className="border-t border-gray-100 pt-3 text-[11px] leading-5 text-gray-500">{report.disclaimer}</p>
+      <section className="w-[min(82vw,360px)] shrink-0 snap-start rounded-xl bg-gray-50 p-3">
+        <h4 className="mb-2 text-sm font-semibold text-gray-800">What you did well</h4>
+        <ul className="list-disc space-y-1 pl-4 text-xs text-gray-700">
+          {report.strengths.map((strength) => <li key={strength}>{strength}</li>)}
+        </ul>
+        <p className="mt-3 border-t border-gray-200 pt-3 text-[11px] leading-5 text-gray-500">{report.disclaimer}</p>
+      </section>
+      </div>
     </div>
   );
 }

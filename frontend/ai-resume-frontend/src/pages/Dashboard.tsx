@@ -154,22 +154,25 @@ export default function Dashboard() {
       .sort((a, b) => b.latest - a.latest);
   }, [candidates]);
 
-  const activeId = currentId && sessions.some((s) => s.id === currentId) ? currentId : sessions[0]?.id ?? null;
-  const current = sessions.find((s) => s.id === activeId);
-  const batch = current?.list ?? [];
-  const otherSessions = sessions.filter((s) => s.id !== activeId);
+  const selectedSession = currentId ? sessions.find((s) => s.id === currentId) : undefined;
+  const activeId = selectedSession?.id ?? sessions[0]?.id ?? null;
+  const batch = selectedSession?.list ?? candidates;
+  const otherSessions = selectedSession ? sessions.filter((s) => s.id !== selectedSession.id) : sessions;
 
-  // ---------- stats for current batch ----------
+  // ---------- stats for all uploads or the selected batch ----------
   const stats = useMemo(() => {
-    if (!current) return null;
+    if (!batch.length) return null;
+    const scores = batch.map(scoreOf);
+    const top = batch.reduce((best, candidate) => scoreOf(candidate) > scoreOf(best) ? candidate : best, batch[0]);
+    const shortlisted = scores.filter((score) => score >= 60).length;
     return {
-      count: current.count,
-      avg: current.avg,
-      top: current.top,
-      shortlisted: current.shortlisted,
-      passRate: Math.round((current.shortlisted / current.count) * 100),
+      count: batch.length,
+      avg: Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length),
+      top,
+      shortlisted,
+      passRate: Math.round((shortlisted / batch.length) * 100),
     };
-  }, [current]);
+  }, [batch]);
 
   const distribution = useMemo(() => {
     const d = [
@@ -322,8 +325,8 @@ export default function Dashboard() {
   }
 
   const statCards = [
-    { icon: Users, label: "Candidates", value: String(stats?.count ?? 0), sub: "in this batch" },
-    { icon: Gauge, label: "Average score", value: `${stats?.avg ?? 0}%`, sub: "across the batch" },
+    { icon: Users, label: "Candidates", value: String(stats?.count ?? 0), sub: selectedSession ? "in this batch" : "all uploaded resumes" },
+    { icon: Gauge, label: "Average score", value: `${stats?.avg ?? 0}%`, sub: selectedSession ? "across the batch" : "across all uploads" },
     { icon: Trophy, label: "Top score", value: stats ? `${Math.round(scoreOf(stats.top))}%` : "–", sub: stats?.top.name ?? "" },
     { icon: ThumbsUp, label: "Shortlisted", value: String(stats?.shortlisted ?? 0), sub: `${stats?.passRate ?? 0}% scored 60%+` },
   ];
@@ -339,7 +342,7 @@ export default function Dashboard() {
           <div>
             <h1 className="text-3xl font-extrabold sm:text-4xl">Screening dashboard</h1>
             <p className="mt-1 text-green-50">
-              {current && current.id !== LEGACY ? `Batch analysed ${fmtDate(current.latest)}` : "Earlier results"}
+              {selectedSession ? `Batch analysed ${fmtDate(selectedSession.latest)}` : "All uploaded resumes"}
               {" · "}
               {batch.length} resume{batch.length === 1 ? "" : "s"}
             </p>
@@ -355,7 +358,7 @@ export default function Dashboard() {
               onClick={() => setShowHistory(true)}
               className="flex items-center gap-2 rounded-xl border border-white/40 bg-white/10 px-5 py-2.5 font-semibold text-white backdrop-blur transition hover:bg-white/20 focus:outline-none focus-visible:ring-4 focus-visible:ring-white/50"
             >
-              <Clock size={18} /> Previous batches ({otherSessions.length})
+              <Clock size={18} /> Upload batches ({otherSessions.length})
             </button>
           </div>
         </div>
@@ -562,7 +565,7 @@ export default function Dashboard() {
         <div className="grid gap-6 lg:grid-cols-3">
           <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-gray-100 lg:col-span-2">
             <h2 className="text-lg font-bold text-gray-900">Score comparison</h2>
-            <p className="mb-4 text-sm text-gray-500">Top {chartData.length} candidates in this batch</p>
+            <p className="mb-4 text-sm text-gray-500">Top {chartData.length} candidates {selectedSession ? "in this batch" : "across all uploads"}</p>
             <div role="img" aria-label="Bar chart comparing candidate scores">
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
@@ -601,7 +604,7 @@ export default function Dashboard() {
                 </li>
               ))}
             </ul>
-            {activeId && activeId !== LEGACY && (
+            {selectedSession && activeId && activeId !== LEGACY && (
               <button
                 onClick={() => setSessionToDelete(activeId)}
                 className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-red-100"
