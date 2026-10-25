@@ -126,7 +126,9 @@ export default function ResumeFeedback({ report }: { report?: ResumeAnalysisRepo
                   {item.issues.filter((issue) => !/no scale or outcome is stated|rewrite as:/i.test(issue)).map((issue) => <li key={issue}>{issue}</li>)}
                 </ul>
               )}
-              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-blue-800">Suggested rewrite</p>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-blue-800">
+                {item.suggestion_source === "gemini" ? "AI-generated suggestion" : item.suggestion_source === "guidance" ? "Suggested improvement" : "Built-in suggestion"}
+              </p>
               <p className="text-xs leading-5 text-blue-900">{item.suggested_version || legacyBulletRewrite(item.original)}</p>
               <p className="mt-1 text-[11px] text-gray-500">Replace bracketed prompts only with facts you can verify.</p>
             </div>

@@ -33,6 +33,7 @@ export interface ResumeAnalysisReport {
     issues: string[];
     suggested_version?: string;
     suggestion?: string;
+    suggestion_source?: "gemini" | "local" | "guidance";
   }>;
   repetition_checks: {
     repeated_terms: Array<{ term: string; count: number }>;

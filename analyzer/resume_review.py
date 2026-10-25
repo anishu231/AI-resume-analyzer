@@ -1,6 +1,7 @@
 """Explainable resume-to-job fit estimate and actionable resume feedback."""
 
 import re
+from difflib import SequenceMatcher
 from collections import Counter
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -137,8 +138,17 @@ def _bullet_feedback(lines):
         words = re.findall(r"[A-Za-z0-9]+", line)
         if len(words) < 6:
             continue
+        # Headlines and education entries are not achievement bullets.
+        if "|" in line or re.search(
+            r"\b(?:b\.?tech|bachelor|master|degree|graduate|university|college|gpa|cgpa|education)\b",
+            lowered,
+        ):
+            continue
         issues = []
         opener = next((phrase for phrase in WEAK_OPENERS if lowered.startswith(phrase)), None)
+        starts_with_action = bool(re.match(r"(?:" + "|".join(sorted(ACTION_VERBS, key=len, reverse=True)) + r")\b", lowered))
+        if not opener and not starts_with_action:
+            continue
         if opener:
             issues.append(WEAK_OPENERS[opener])
         first_word = re.sub(r"[^a-z]", "", words[0].lower()) if words else ""
@@ -152,10 +162,15 @@ def _bullet_feedback(lines):
             issues.append("This line is long; keep its main action and most relevant detail.")
         if issues:
             suggested_version = _suggest_bullet(line, opener)
+            normalize = lambda value: re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+            unchanged = SequenceMatcher(None, normalize(line), normalize(suggested_version)).ratio() > 0.92
+            if unchanged:
+                suggested_version = "Keep this line if it is accurate. Strengthen it by adding a verified result, scale, or decision it supported, if you can substantiate one."
             feedback.append({
                 "original": line[:260],
                 "issues": issues[:2],
                 "suggested_version": suggested_version,
+                "suggestion_source": "guidance" if unchanged else "local",
             })
         if len(feedback) >= 5:
             break

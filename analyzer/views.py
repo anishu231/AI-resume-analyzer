@@ -29,6 +29,67 @@ import re
 
 import os
 import traceback
+import json
+import requests
+from difflib import SequenceMatcher
+
+
+def add_gemini_bullet_suggestions(report, job_description):
+    """Try Gemini, with configured fallback models, for actual resume bullets."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    targets = [item for item in report.get("bullet_feedback", []) if item.get("original")]
+    if not api_key or not targets:
+        return report
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+    fallback_models = [
+        value.strip()
+        for value in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-2.5-flash,gemini-2.5-flash-lite").split(",")
+        if value.strip() and value.strip() != model
+    ]
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": (
+            "Rewrite each achievement bullet for clarity and relevance to the job. "
+            "Use only facts in the original. Do not invent metrics, outcomes, tools, or responsibilities. "
+            "If the line is already good, return a concise improvement prompt instead of repeating it. "
+            "Return valid JSON only: {\"suggestions\":[\"...\"]} in the same order.\n"
+            + "Job description: " + job_description[:4000] + "\nBullets: "
+            + json.dumps([item["original"][:500] for item in targets])
+        )}]}],
+        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json", "maxOutputTokens": 1200},
+    }
+
+    last_error = None
+    for candidate_model in [model, *fallback_models]:
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
+                headers={"x-goog-api-key": api_key}, json=payload, timeout=12,
+            )
+            response.raise_for_status()
+            text = "".join(part.get("text", "") for part in response.json()["candidates"][0]["content"]["parts"])
+            suggestions = json.loads(text).get("suggestions", [])
+            if len(suggestions) != len(targets):
+                raise ValueError("Gemini returned an unexpected number of suggestions")
+            for item, suggestion in zip(targets, suggestions):
+                if not isinstance(suggestion, str) or not suggestion.strip():
+                    continue
+                original = re.sub(r"[^a-z0-9]+", "", item["original"].lower())
+                rewritten = re.sub(r"[^a-z0-9]+", "", suggestion.lower())
+                if SequenceMatcher(None, original, rewritten).ratio() > 0.92:
+                    item["suggested_version"] = "Keep this line if it is accurate. Add a verified result or scope only if you can support it."
+                    item["suggestion_source"] = "guidance"
+                else:
+                    item["suggested_version"] = suggestion.strip()[:700]
+                    item["suggestion_source"] = "gemini"
+            last_error = None
+            break
+        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
+            last_error = exc
+            print(f"[GEMINI REWRITE] {candidate_model} failed: {exc}")
+    if last_error:
+        print("[GEMINI REWRITE] All models failed; keeping local suggestions")
+    return report
 # ============================================================================
 # ML PREDICTOR INITIALIZATION (Run once at server startup)
 # ============================================================================
@@ -335,6 +396,7 @@ def upload_resume(request):
                 resume_skills=resume_skills,
                 job_skills=job_skills,
             )
+            add_gemini_bullet_suggestions(analysis_report, job_description_text)
             final_score = analysis_report["score"]
             matched_keywords = analysis_report["matched_skills"]
             missing_keywords = analysis_report["missing_skills"]
