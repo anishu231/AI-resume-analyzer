@@ -16,7 +16,7 @@ from .models import JobSearchProviderUsage
 
 
 EXPERIENCE_LABELS = {
-    "entry": "Entry-level (0-2 years)",
+    "entry": "Entry / Fresher (0-1 year)",
     "mid": "Mid-level (2-10 years)",
     "senior": "Senior-level (10+ years)",
 }
@@ -25,8 +25,12 @@ CACHE_SECONDS = 30 * 60
 MAX_RESULTS_PER_SOURCE = 40
 REQUEST_TIMEOUT = 12
 
-ENTRY_TERMS = ("junior", "associate", "intern", "internship", "fresher", "graduate", "entry level", "trainee")
+ENTRY_TERMS = ("junior", "associate", "intern", "internship", "fresher", "graduate", "new grad", "entry level", "trainee", "early career")
 SENIOR_TERMS = ("senior", "lead", "manager", "principal", "staff", "director", "head of")
+
+
+def _level_text(value):
+    return re.sub(r"[^a-z0-9]+", " ", re.sub(r"[–—−]", "-", (value or "").lower()))
 
 
 def _reserve_provider_call(source, key_material, bucket, limit_name, default_limit):
@@ -63,24 +67,51 @@ def _clean(value, limit=500):
     return re.sub(r"\s+", " ", value).strip()[:limit]
 
 
-def _level(title):
-    normalized = re.sub(r"[^a-z0-9]+", " ", title.lower())
+def _level(title, description=""):
+    title_normalized = _level_text(title)
+    description_normalized = _level_text(description)
+    if any(term in title_normalized for term in ENTRY_TERMS):
+        return "entry"
+    if any(term in title_normalized for term in SENIOR_TERMS):
+        return "senior"
+    normalized = description_normalized
     if any(term in normalized for term in ENTRY_TERMS):
         return "entry"
     if any(term in normalized for term in SENIOR_TERMS):
+        return "senior"
+    if re.search(r"\b0\s*(?:-|to)\s*1\s*(?:\+\s*)?years?\b|\b(?:one|1)\s+year\s+of\s+experience\b", normalized):
+        return "entry"
+    if re.search(r"\b(?:2\s*(?:-|to)\s*10|[3-9]|10)\s*(?:\+\s*)?years?\b", normalized):
+        return "mid"
+    if re.search(r"\b(?:11|12|1[3-9]|[2-9]\d)\s*(?:\+\s*)?years?\b", normalized):
         return "senior"
     return "mid"
 
 
 def _has_explicit_level(title):
-    normalized = re.sub(r"[^a-z0-9]+", " ", (title or "").lower())
+    normalized = _level_text(title)
     return any(term in normalized for term in ENTRY_TERMS + SENIOR_TERMS)
 
 
-def _level_matches(requested_level, title):
+def _has_level_signal(title, description=""):
+    combined = _level_text(f"{title or ''} {description or ''}")
+    return (
+        any(term in combined for term in ENTRY_TERMS + SENIOR_TERMS)
+        or bool(re.search(r"\b(?:0\s*(?:-|to)\s*1|2\s*(?:-|to)\s*10|[1-9]|10|1[1-9]|[2-9]\d)\s*(?:\+\s*)?years?\b|\b(?:one|1)\s+year\s+of\s+experience\b", combined))
+    )
+
+
+def _level_matches(requested_level, title, description=""):
     # Most job titles do not state seniority. Keep those results available at
-    # every selected level; only exclude a title with an explicit conflicting signal.
-    return not _has_explicit_level(title) or _level(title) == requested_level
+    # every selected level; only exclude a posting with an explicit conflicting signal.
+    if _has_explicit_level(title):
+        return _level(title) == requested_level
+    if any(term in _level_text(description) for term in ENTRY_TERMS + SENIOR_TERMS):
+        return _level(title, description) == requested_level
+    years = re.search(r"\b(?:0\s*(?:-|to)\s*1|2\s*(?:-|to)\s*10|[1-9]|10|1[1-9]|[2-9]\d)\s*(?:\+\s*)?years?\b|\b(?:one|1)\s+year\s+of\s+experience\b", _level_text(description))
+    if years:
+        return _level(title, description) == requested_level
+    return True
 
 
 def _role_terms(text):
@@ -196,8 +227,8 @@ def _job(title, company, location, url, posted, source, description=""):
         "location": location,
         "url": url,
         "posted": _posted(posted),
-        "level": _level(title),
-        "level_specified": _has_explicit_level(title),
+        "level": _level(title, description),
+        "level_specified": _has_level_signal(title, description),
         "source": source,
         "_description": _clean(description, 1500),
     }
@@ -236,7 +267,7 @@ def _greenhouse(company, role, level, location):
     for item in response.json().get("jobs", []):
         content = item.get("content", "")
         job = _job(item.get("title"), company["name"], (item.get("location") or {}).get("name"), item.get("absolute_url"), item.get("updated_at"), "greenhouse", content)
-        if job and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+        if job and _level_matches(level, job["title"], job["_description"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
             jobs.append(job)
     return jobs
 
@@ -251,7 +282,7 @@ def _lever(company, role, level, location):
     for item in response.json():
         categories = item.get("categories") or {}
         job = _job(item.get("text"), company["name"], categories.get("location") or ", ".join(categories.get("allLocations") or []), item.get("applyUrl") or item.get("hostedUrl"), item.get("createdAt"), "lever", item.get("descriptionPlain") or item.get("openingPlain"))
-        if job and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+        if job and _level_matches(level, job["title"], job["_description"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
             jobs.append(job)
     return jobs
 
@@ -269,7 +300,7 @@ def _adzuna(role, level, location):
         params["where"] = provider_location
     response = requests.get("https://api.adzuna.com/v1/api/jobs/in/search/1", params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-    return [job for item in response.json().get("results", []) if (job := _job(item.get("title"), (item.get("company") or {}).get("display_name"), (item.get("location") or {}).get("display_name"), item.get("redirect_url"), item.get("created"), "adzuna", item.get("description"))) and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+    return [job for item in response.json().get("results", []) if (job := _job(item.get("title"), (item.get("company") or {}).get("display_name"), (item.get("location") or {}).get("display_name"), item.get("redirect_url"), item.get("created"), "adzuna", item.get("description"))) and _level_matches(level, job["title"], job["_description"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
 
 
 def _jooble(role, level, location):
@@ -280,7 +311,7 @@ def _jooble(role, level, location):
     payload = {"keywords": role, "location": _provider_location(location) or "India", "page": "1", "ResultOnPage": MAX_RESULTS_PER_SOURCE, "companysearch": "false"}
     response = requests.post(f"https://in.jooble.org/api/{api_key}", json=payload, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-    return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+    return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and _level_matches(level, job["title"], job["_description"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
 
 
 def _fetch_all(role, level, location):

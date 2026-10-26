@@ -39,7 +39,7 @@ type SearchState = {
 };
 
 const LEVELS = [
-  { value: "entry", label: "Entry-level", detail: "0–2 years" },
+  { value: "entry", label: "Entry / Fresher", detail: "0–1 year" },
   { value: "mid", label: "Mid-level", detail: "2–10 years" },
   { value: "senior", label: "Senior-level", detail: "10+ years" },
 ];
@@ -189,7 +189,7 @@ export default function JobSearch() {
                     )}
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
-                  <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level_specified === false ? "Experience level not stated" : job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
+                  <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level_specified === false ? "Experience level not stated" : job.level === "entry" ? "Entry / Fresher (0–1 year)" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
                   {typeof job.role_relevance === "number" && <span className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-800">Role relevance {job.role_relevance}%</span>}
                   {hasResume && job.resume_match && (
                     <div className="mt-4 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
