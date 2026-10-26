@@ -4,7 +4,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone as datetime_timezone
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -30,7 +30,10 @@ SENIOR_TERMS = ("senior", "lead", "manager", "principal", "staff", "director", "
 
 
 def _level_text(value):
-    return re.sub(r"[^a-z0-9]+", " ", re.sub(r"[–—−]", "-", (value or "").lower()))
+    normalized = (value or "").lower()
+    for dash in ("\u2013", "\u2014", "\u2212"):
+        normalized = normalized.replace(dash, "-")
+    return re.sub(r"[^a-z0-9]+", " ", normalized)
 
 
 def _reserve_provider_call(source, key_material, bucket, limit_name, default_limit):
@@ -214,6 +217,20 @@ def _posted(value):
     return ""
 
 
+def _posted_within_days(value, days=15):
+    """Only include dated postings from the recent lookback window."""
+    if not value:
+        return False
+    try:
+        posted_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=datetime_timezone.utc)
+        cutoff = datetime.now(datetime_timezone.utc) - timedelta(days=days)
+        return posted_at.astimezone(datetime_timezone.utc) >= cutoff
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _job(title, company, location, url, posted, source, description=""):
     title = _clean(title, 180)
     company = _clean(company, 120)
@@ -340,6 +357,8 @@ def _fetch_all(role, level, location):
 
     unique, seen = [], set()
     for job in jobs:
+        if not _posted_within_days(job.get("posted")):
+            continue
         key = (re.sub(r"[^a-z0-9]", "", job["title"].casefold()), re.sub(r"[^a-z0-9]", "", job["company"].casefold()))
         if key in seen:
             continue
@@ -353,7 +372,7 @@ def _fetch_all(role, level, location):
 
 
 def search_jobs(role, level, location=""):
-    cache_material = "|".join((role.strip().casefold(), level, location.strip().casefold()))
+    cache_material = "recent15-v1|" + "|".join((role.strip().casefold(), level, location.strip().casefold()))
     cache_key = "job-search:" + hashlib.sha256(cache_material.encode("utf-8")).hexdigest()
     cached = cache.get(cache_key)
     if cached is not None:
