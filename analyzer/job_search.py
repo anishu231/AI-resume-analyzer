@@ -71,26 +71,59 @@ def _level(title):
     return "mid"
 
 
+def _has_explicit_level(title):
+    normalized = re.sub(r"[^a-z0-9]+", " ", (title or "").lower())
+    return any(term in normalized for term in ENTRY_TERMS + SENIOR_TERMS)
+
+
+def _level_matches(requested_level, title):
+    # Most job titles do not state seniority. Keep those results available at
+    # every selected level; only exclude a title with an explicit conflicting signal.
+    return not _has_explicit_level(title) or _level(title) == requested_level
+
+
 def _role_matches(role, title, description=""):
-    synonyms = {"developer": "engineer", "developers": "engineer", "engineers": "engineer"}
-    required = {synonyms.get(word, word) for word in re.findall(r"[a-z0-9+#.]+", role.lower())}
-    searchable = {synonyms.get(word, word) for word in re.findall(r"[a-z0-9+#.]+", f"{title} {description}".lower())}
-    return not required or required.issubset(searchable)
+    def terms(text):
+        normalized = re.sub(r"\b(?:artificial intelligence|machine learning)\b", " ai ", text.lower())
+        tokens = re.findall(r"[a-z0-9+#.]+", normalized)
+        synonyms = {
+            "developer": "engineer", "developers": "engineer",
+            "engineers": "engineer", "programmer": "engineer",
+            "programmers": "engineer", "engineering": "engineer",
+        }
+        return {synonyms.get(token, token) for token in tokens}
+
+    required = terms(role)
+    if not required:
+        return True
+    title_terms = terms(title)
+    searchable = title_terms | terms(description)
+    # Treat developer, engineer, and programmer as one role family. Require
+    # that family in the listing as well as any specific role/technology terms.
+    role_family = "engineer"
+    family_requested = role_family in required
+    specific_terms = required - {role_family, "software"}
+    if family_requested and role_family not in searchable:
+        return False
+    return specific_terms.issubset(searchable)
 
 
 def _location_matches(location_filter, location):
     if not location_filter:
         return True
-    wanted = location_filter.casefold().strip()
     actual = (location or "").casefold()
-    return wanted in actual or ("remote" in wanted and "remote" in actual)
+    cleaned = _provider_location(location_filter)
+    local_parts = [part.strip().casefold() for part in re.split(r"[,;]", cleaned) if part.strip()]
+    # India-scoped APIs may return a city/state without repeating the country.
+    # Match the local place segment instead of requiring "India, Noida" verbatim.
+    if local_parts:
+        return any(part in actual for part in local_parts)
+    return "india" in actual or "bharat" in actual
 
 
-def _company_key(value):
-    words = re.findall(r"[a-z0-9]+", (value or "").casefold())
-    while words and words[-1] in {"inc", "incorporated", "ltd", "limited", "plc", "corp", "corporation", "company", "co"}:
-        words.pop()
-    return "".join(words)
+def _provider_location(location):
+    cleaned = re.sub(r"\b(?:india|bharat)\b", " ", location or "", flags=re.I)
+    return re.sub(r"\s*[,;]\s*|\s+", " ", cleaned).strip()
 
 
 def _posted(value):
@@ -133,6 +166,7 @@ def _job(title, company, location, url, posted, source, description=""):
         "url": url,
         "posted": _posted(posted),
         "level": _level(title),
+        "level_specified": _has_explicit_level(title),
         "source": source,
         "_description": _clean(description, 1500),
     }
@@ -171,7 +205,7 @@ def _greenhouse(company, role, level, location):
     for item in response.json().get("jobs", []):
         content = item.get("content", "")
         job = _job(item.get("title"), company["name"], (item.get("location") or {}).get("name"), item.get("absolute_url"), item.get("updated_at"), "greenhouse", content)
-        if job and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+        if job and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
             jobs.append(job)
     return jobs
 
@@ -186,7 +220,7 @@ def _lever(company, role, level, location):
     for item in response.json():
         categories = item.get("categories") or {}
         job = _job(item.get("text"), company["name"], categories.get("location") or ", ".join(categories.get("allLocations") or []), item.get("applyUrl") or item.get("hostedUrl"), item.get("createdAt"), "lever", item.get("descriptionPlain") or item.get("openingPlain"))
-        if job and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
+        if job and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"]):
             jobs.append(job)
     return jobs
 
@@ -199,11 +233,12 @@ def _adzuna(role, level, location):
     day = datetime.now(datetime_timezone.utc).date().isoformat()
     _reserve_provider_call("adzuna", f"{app_id}:{app_key}", day, "ADZUNA_DAILY_JOB_SEARCH_LIMIT", 200)
     params = {"app_id": app_id, "app_key": app_key, "results_per_page": MAX_RESULTS_PER_SOURCE, "what": role}
-    if location:
-        params["where"] = location
+    provider_location = _provider_location(location)
+    if provider_location:
+        params["where"] = provider_location
     response = requests.get("https://api.adzuna.com/v1/api/jobs/in/search/1", params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-    return [job for item in response.json().get("results", []) if (job := _job(item.get("title"), (item.get("company") or {}).get("display_name"), (item.get("location") or {}).get("display_name"), item.get("redirect_url"), item.get("created"), "adzuna", item.get("description"))) and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+    return [job for item in response.json().get("results", []) if (job := _job(item.get("title"), (item.get("company") or {}).get("display_name"), (item.get("location") or {}).get("display_name"), item.get("redirect_url"), item.get("created"), "adzuna", item.get("description"))) and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
 
 
 def _jooble(role, level, location):
@@ -211,10 +246,10 @@ def _jooble(role, level, location):
     if not api_key:
         raise RuntimeError("Jooble India is not configured (JOOBLE_KEY).")
     _reserve_provider_call("jooble", api_key, "lifetime", "JOOBLE_LIFETIME_JOB_SEARCH_LIMIT", 450)
-    payload = {"keywords": role, "location": location or "India", "page": "1", "ResultOnPage": MAX_RESULTS_PER_SOURCE, "companysearch": "false"}
+    payload = {"keywords": role, "location": _provider_location(location) or "India", "page": "1", "ResultOnPage": MAX_RESULTS_PER_SOURCE, "companysearch": "false"}
     response = requests.post(f"https://in.jooble.org/api/{api_key}", json=payload, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-    return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and job["level"] == level and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
+    return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and _level_matches(level, job["title"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
 
 
 def _fetch_all(role, level, location):
@@ -241,12 +276,6 @@ def _fetch_all(role, level, location):
                 errors.append(source)
                 print(f"[JOB SEARCH] {source} failed: {detail}")
 
-    allowed_public_companies = {_company_key(company["name"]) for company in companies}
-    jobs = [
-        job for job in jobs
-        if job["source"] in ("greenhouse", "lever")
-        or _company_key(job["company"]) in allowed_public_companies
-    ]
     unique, seen = [], set()
     for job in jobs:
         key = (re.sub(r"[^a-z0-9]", "", job["title"].casefold()), re.sub(r"[^a-z0-9]", "", job["company"].casefold()))

@@ -13,6 +13,7 @@ type Job = {
   url: string;
   posted: string;
   level: string;
+  level_specified?: boolean;
   source?: "greenhouse" | "lever" | "adzuna" | "jooble";
   source_title?: string;
   resume_match?: {
@@ -114,7 +115,7 @@ export default function JobSearch() {
         <header className="mb-7">
           <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">Find your next role</p>
           <h1 className="mt-2 text-3xl font-extrabold text-slate-950 sm:text-4xl">Job Search</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Search current listings from company career pages using your target role and experience level.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Search company career pages and job sources using your target role, experience level, and location.</p>
         </header>
 
         <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:p-7">
@@ -187,7 +188,7 @@ export default function JobSearch() {
                     )}
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
-                  <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
+                  <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level_specified === false ? "Experience level not stated" : job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
                   {hasResume && job.resume_match && (
                     <div className="mt-4 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
                       <div className="flex items-center justify-between gap-2">
