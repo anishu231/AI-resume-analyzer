@@ -141,6 +141,7 @@ def _add_resume_skill_matches(user, jobs, location_filter=""):
         }
     jobs.sort(
         key=lambda job: (
+            job.get("role_relevance", 0),
             job["resume_match"]["score"] is not None,
             job["resume_match"]["score"] if job["resume_match"]["score"] is not None else -1,
             job.get("posted", ""),

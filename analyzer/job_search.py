@@ -5,6 +5,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone as datetime_timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import requests
@@ -82,30 +83,60 @@ def _level_matches(requested_level, title):
     return not _has_explicit_level(title) or _level(title) == requested_level
 
 
-def _role_matches(role, title, description=""):
-    def terms(text):
-        normalized = re.sub(r"\b(?:artificial intelligence|machine learning)\b", " ai ", text.lower())
-        tokens = re.findall(r"[a-z0-9+#.]+", normalized)
-        synonyms = {
-            "developer": "engineer", "developers": "engineer",
-            "engineers": "engineer", "programmer": "engineer",
-            "programmers": "engineer", "engineering": "engineer",
-        }
-        return {synonyms.get(token, token) for token in tokens}
+def _role_terms(text):
+    normalized = (text or "").lower()
+    normalized = re.sub(r"\b(?:artificial intelligence|machine learning|deep learning)\b", " ai ", normalized)
+    normalized = re.sub(r"\bfront[ -]?end\b", " frontend ", normalized)
+    normalized = re.sub(r"\bback[ -]?end\b", " backend ", normalized)
+    normalized = re.sub(r"\bfull[ -]?stack\b", " fullstack ", normalized)
+    tokens = re.findall(r"[a-z0-9+#.]+", normalized)
+    level_words = set(ENTRY_TERMS + SENIOR_TERMS + ("mid", "midlevel", "intermediate"))
+    tokens = [token for token in tokens if token not in level_words and token not in {"the", "and", "or", "for", "of", "role", "job"}]
 
-    required = terms(role)
-    if not required:
-        return True
-    title_terms = terms(title)
-    searchable = title_terms | terms(description)
-    # Treat developer, engineer, and programmer as one role family. Require
-    # that family in the listing as well as any specific role/technology terms.
-    role_family = "engineer"
-    family_requested = role_family in required
-    specific_terms = required - {role_family, "software"}
-    if family_requested and role_family not in searchable:
-        return False
-    return specific_terms.issubset(searchable)
+    if "ai" in tokens:
+        tokens = ["ai_role" if token in {"engineer", "engineering", "developer", "programmer", "scientist", "researcher"} else token for token in tokens]
+    elif "data" in tokens:
+        tokens = ["data_role" if token in {"engineer", "engineering", "developer", "programmer", "scientist", "science", "analyst"} else token for token in tokens]
+    else:
+        tokens = ["software_role" if token in {"engineer", "engineering", "developer", "developers", "programmer", "programmers", "software"} else token for token in tokens]
+    return set(tokens)
+
+
+def _role_relevance(role, title, description=""):
+    """Return a transparent 0-100 role-title relevance estimate."""
+    wanted = _role_terms(role)
+    if not wanted:
+        return 100
+
+    title_terms = _role_terms(title)
+    description_terms = _role_terms(description)
+    families = {"software_role", "ai_role", "data_role"}
+    requested_families = wanted & families
+    if requested_families and not requested_families.intersection(title_terms):
+        return 0
+
+    specific_terms = wanted - families
+    if not specific_terms:
+        return 100 if requested_families.intersection(title_terms) else 0
+
+    searchable_terms = title_terms | description_terms
+    matched = 0
+    for term in specific_terms:
+        if term in searchable_terms or any(
+            len(term) >= 4 and len(candidate) >= 4 and SequenceMatcher(None, term, candidate).ratio() >= 0.84
+            for candidate in searchable_terms
+        ):
+            matched += 1
+    coverage = matched / len(specific_terms)
+    if coverage < 0.5:
+        return 0
+    if requested_families:
+        return round(75 * coverage + 25)
+    return round(100 * coverage)
+
+
+def _role_matches(role, title, description=""):
+    return _role_relevance(role, title, description) >= 45
 
 
 def _location_matches(location_filter, location):
@@ -282,8 +313,9 @@ def _fetch_all(role, level, location):
         if key in seen:
             continue
         seen.add(key)
+        job["role_relevance"] = _role_relevance(role, job["title"], job.get("_description", ""))
         unique.append(job)
-    unique.sort(key=lambda item: item["posted"] or "", reverse=True)
+    unique.sort(key=lambda item: (item["role_relevance"], item["posted"] or ""), reverse=True)
     for job in unique:
         job["description"] = job.pop("_description", "")
     return unique, errors, len(tasks)

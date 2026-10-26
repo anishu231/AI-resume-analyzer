@@ -14,6 +14,7 @@ type Job = {
   posted: string;
   level: string;
   level_specified?: boolean;
+  role_relevance?: number;
   source?: "greenhouse" | "lever" | "adzuna" | "jooble";
   source_title?: string;
   resume_match?: {
@@ -189,6 +190,7 @@ export default function JobSearch() {
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
                   <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level_specified === false ? "Experience level not stated" : job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
+                  {typeof job.role_relevance === "number" && <span className="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-800">Role relevance {job.role_relevance}%</span>}
                   {hasResume && job.resume_match && (
                     <div className="mt-4 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
                       <div className="flex items-center justify-between gap-2">
