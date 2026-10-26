@@ -156,6 +156,9 @@ def _run_job_search(user, role, experience_level, location):
         return Response({"error": "Choose an experience level."}, status=status.HTTP_400_BAD_REQUEST)
     if len(location) > 120:
         return Response({"error": "Location must be 120 characters or fewer."}, status=status.HTTP_400_BAD_REQUEST)
+    # This app primarily serves Indian job seekers; an empty location should
+    # not fan out into unrelated global listings from company ATS boards.
+    location = location or "India"
     try:
         result, cached = search_jobs(role, experience_level, location)
     except RuntimeError as exc:

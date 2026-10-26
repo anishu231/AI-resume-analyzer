@@ -135,10 +135,10 @@ export default function JobSearch() {
             </label>
 
             <label className="block md:col-span-2">
-              <span className="mb-2 block text-sm font-semibold text-slate-800">Location <span className="font-normal text-slate-500">(optional)</span></span>
+              <span className="mb-2 block text-sm font-semibold text-slate-800">Location <span className="font-normal text-slate-500">(optional; defaults to India)</span></span>
               <span className="flex items-center gap-2 rounded-xl border border-slate-300 px-3 focus-within:border-emerald-600 focus-within:ring-2 focus-within:ring-emerald-100">
                 <MapPin size={17} className="shrink-0 text-slate-400" />
-                <input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={120} placeholder="City, country, or Remote" className="w-full border-0 py-3 text-sm outline-none focus:ring-0" />
+                <input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={120} placeholder="India, Bengaluru, or Remote" className="w-full border-0 py-3 text-sm outline-none focus:ring-0" />
               </span>
             </label>
 
@@ -147,7 +147,7 @@ export default function JobSearch() {
                 {searching || loading ? <LoaderCircle size={18} className="animate-spin" /> : <Search size={18} />}
                 {searching ? "Searching company career pages…" : loading ? "Loading search status…" : "Search jobs"}
               </button>
-              <p className="mt-3 text-xs leading-5 text-slate-500">Search as needed. Results are restricted to company career pages and verified company-hosted job links.</p>
+              <p className="mt-3 text-xs leading-5 text-slate-500">Leave location blank to search in India. Enter another location to search there.</p>
             </div>
           </form>
         </section>
