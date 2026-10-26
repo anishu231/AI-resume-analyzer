@@ -15,6 +15,12 @@ type Job = {
   level: string;
   source?: "greenhouse" | "lever" | "adzuna" | "jooble";
   source_title?: string;
+  resume_match?: {
+    score: number | null;
+    matched_skills: string[];
+    missing_skills: string[];
+    skills_assessed: number;
+  };
 };
 
 type SearchState = {
@@ -27,6 +33,7 @@ type SearchState = {
   location: string;
   jobs: Job[];
   source_errors?: string[];
+  has_resume?: boolean;
 };
 
 const LEVELS = [
@@ -45,6 +52,7 @@ export default function JobSearch() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [sourceErrors, setSourceErrors] = useState<string[]>([]);
+  const [hasResume, setHasResume] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
 
   const token = () => localStorage.getItem("access") || "";
@@ -68,6 +76,7 @@ export default function JobSearch() {
   const applySearchState = (data: SearchState) => {
     setJobs(data.jobs || []);
     setSourceErrors(data.source_errors || []);
+    setHasResume(Boolean(data.has_resume));
     setLastSearchAt(data.last_search_at);
     if (data.role) setRole(data.role);
     if (data.experience_level) setExperienceLevel(data.experience_level);
@@ -154,6 +163,11 @@ export default function JobSearch() {
 
           {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
           {sourceErrors.length > 0 && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">Some job sources did not respond ({sourceErrors.join(", ")}); results from available sources are shown.</p>}
+          {jobs.length > 0 && !hasResume && (
+            <p className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              Upload a resume to see which listed job skills match your profile. <Link to="/upload" className="font-semibold underline">Upload resume</Link>
+            </p>
+          )}
 
           {jobs.length > 0 ? (
             <div className="grid gap-4 lg:grid-cols-2">
@@ -174,6 +188,17 @@ export default function JobSearch() {
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
                   <p className="mt-2 text-xs text-slate-500">{job.posted ? `Posted ${new Date(job.posted).toLocaleDateString()}` : "Posted date unavailable"} · {job.level === "entry" ? "Entry-level" : job.level === "senior" ? "Senior-level" : "Mid-level"}</p>
+                  {hasResume && job.resume_match && (
+                    <div className="mt-4 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-800">Resume skill match</p>
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800">{job.resume_match.score === null ? "Not enough skill data" : `${job.resume_match.score}%`}</span>
+                      </div>
+                      <p className="mt-1 text-[11px] text-slate-500">Based on recognized skills in your latest uploaded resume and this listing; not an employer ATS score.</p>
+                      {job.resume_match.matched_skills.length > 0 && <p className="mt-2 text-xs text-emerald-800"><span className="font-semibold">Found in resume:</span> {job.resume_match.matched_skills.slice(0, 5).join(", ")}{job.resume_match.matched_skills.length > 5 ? ` +${job.resume_match.matched_skills.length - 5} more` : ""}</p>}
+                      {job.resume_match.missing_skills.length > 0 && <p className="mt-1 text-xs text-amber-800"><span className="font-semibold">Not found:</span> {job.resume_match.missing_skills.slice(0, 5).join(", ")}{job.resume_match.missing_skills.length > 5 ? ` +${job.resume_match.missing_skills.length - 5} more` : ""}</p>}
+                    </div>
+                  )}
                   <a href={job.url} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
                     Apply <ExternalLink size={15} />
                   </a>

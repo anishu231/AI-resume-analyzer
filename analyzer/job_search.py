@@ -256,7 +256,7 @@ def _fetch_all(role, level, location):
         unique.append(job)
     unique.sort(key=lambda item: item["posted"] or "", reverse=True)
     for job in unique:
-        job.pop("_description", None)
+        job["description"] = job.pop("_description", "")
     return unique, errors, len(tasks)
 
 

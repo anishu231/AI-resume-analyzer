@@ -120,6 +120,34 @@ def _job_search_payload(quota):
     }
 
 
+def _add_resume_skill_matches(user, jobs):
+    """Compare public listing skills with skills extracted from the user's latest resume."""
+    candidate = Candidate.objects.filter(user=user).exclude(extracted_text="").first()
+    if not candidate:
+        return jobs, False
+
+    resume_skills = set(candidate.extracted_skills or extract_skills(candidate.extracted_text))
+    for job in jobs:
+        job_skills = set(extract_skills(f"{job.get('title', '')}\n{job.get('description', '')}"))
+        matched = sorted(resume_skills & job_skills)
+        missing = sorted(job_skills - resume_skills)
+        job["resume_match"] = {
+            "score": round(len(matched) / len(job_skills) * 100) if job_skills else None,
+            "matched_skills": matched,
+            "missing_skills": missing,
+            "skills_assessed": len(job_skills),
+        }
+    jobs.sort(
+        key=lambda job: (
+            job["resume_match"]["score"] is not None,
+            job["resume_match"]["score"] if job["resume_match"]["score"] is not None else -1,
+            job.get("posted", ""),
+        ),
+        reverse=True,
+    )
+    return jobs, True
+
+
 def _run_job_search(user, role, experience_level, location):
     """Run a provider search without a per-user cooldown."""
     if not role or len(role) > 120:
@@ -137,7 +165,7 @@ def _run_job_search(user, role, experience_level, location):
     if result.get("all_sources_failed"):
         return Response({"error": result.get("error") or "All job sources are temporarily unavailable. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
 
-    jobs = result["jobs"]
+    jobs, has_resume = _add_resume_skill_matches(user, result["jobs"])
     with transaction.atomic():
         quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=user)
         quota.target_role = role
@@ -149,6 +177,8 @@ def _run_job_search(user, role, experience_level, location):
         data = _job_search_payload(quota)
         data["source_errors"] = result.get("source_errors", [])
         data["cached"] = cached
+        data["has_resume"] = has_resume
+        data["match_basis"] = "recognized_job_skill_coverage"
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -157,7 +187,9 @@ def _run_job_search(user, role, experience_level, location):
 def job_search(request):
     """Preserve the original status endpoint and POST contract."""
     if request.method == "GET":
-        return Response(_job_search_payload(JobSearchQuota.objects.filter(user=request.user).first()))
+        data = _job_search_payload(JobSearchQuota.objects.filter(user=request.user).first())
+        data["jobs"], data["has_resume"] = _add_resume_skill_matches(request.user, data["jobs"])
+        return Response(data)
     return _run_job_search(
         request.user,
         str(request.data.get("role", "")).strip(),
