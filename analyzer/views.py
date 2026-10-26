@@ -35,7 +35,7 @@ from datetime import timedelta
 from django.db import transaction
 from difflib import SequenceMatcher
 from .models import JobSearchQuota
-from .job_search import EXPERIENCE_LABELS, search_jobs
+from .job_search import EXPERIENCE_LABELS, _location_matches, search_jobs
 
 
 def add_gemini_bullet_suggestions(report, job_description):
@@ -120,8 +120,10 @@ def _job_search_payload(quota):
     }
 
 
-def _add_resume_skill_matches(user, jobs):
+def _add_resume_skill_matches(user, jobs, location_filter=""):
     """Compare public listing skills with skills extracted from the user's latest resume."""
+    if location_filter:
+        jobs = [job for job in jobs if _location_matches(location_filter, job.get("location", ""))]
     candidate = Candidate.objects.filter(user=user).exclude(extracted_text="").first()
     if not candidate:
         return jobs, False
@@ -168,7 +170,7 @@ def _run_job_search(user, role, experience_level, location):
     if result.get("all_sources_failed"):
         return Response({"error": result.get("error") or "All job sources are temporarily unavailable. Try again later."}, status=status.HTTP_502_BAD_GATEWAY)
 
-    jobs, has_resume = _add_resume_skill_matches(user, result["jobs"])
+    jobs, has_resume = _add_resume_skill_matches(user, result["jobs"], location)
     with transaction.atomic():
         quota, _ = JobSearchQuota.objects.select_for_update().get_or_create(user=user)
         quota.target_role = role
@@ -191,7 +193,9 @@ def job_search(request):
     """Preserve the original status endpoint and POST contract."""
     if request.method == "GET":
         data = _job_search_payload(JobSearchQuota.objects.filter(user=request.user).first())
-        data["jobs"], data["has_resume"] = _add_resume_skill_matches(request.user, data["jobs"])
+        data["jobs"], data["has_resume"] = _add_resume_skill_matches(
+            request.user, data["jobs"], data["location"] or "India"
+        )
         return Response(data)
     return _run_job_search(
         request.user,
