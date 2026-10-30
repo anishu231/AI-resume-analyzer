@@ -687,6 +687,9 @@ export default function UploadPage() {
                               <div>
                                 <h3 className="font-semibold text-emerald-950">AI-tailored resume draft</h3>
                                 <p className="mt-1 text-xs text-emerald-800">Generated with Gemini using your job description. Review every detail before applying.</p>
+                                {typeof c.ai_resume_rewrite_score === "number" && (
+                                  <p className="mt-2 text-sm font-semibold text-emerald-900">Estimated score for this draft: {Math.round(c.ai_resume_rewrite_score)}%</p>
+                                )}
                               </div>
                               {c.ai_resume_rewrite_docx_base64 && (
                                 <button

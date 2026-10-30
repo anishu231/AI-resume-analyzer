@@ -40,7 +40,7 @@ from .models import JobSearchQuota
 from .job_search import EXPERIENCE_LABELS, _location_matches, search_jobs
 
 
-def generate_gemini_resume_rewrite(resume_text, job_description, experience_level):
+def generate_gemini_resume_rewrite(resume_text, job_description, experience_level, analysis_report=None):
     """Create a complete, JD-targeted resume using only facts in the source resume."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key or not resume_text.strip() or not job_description.strip():
@@ -55,15 +55,26 @@ def generate_gemini_resume_rewrite(resume_text, job_description, experience_leve
     # Keep the synchronous upload request bounded: a slow model must not hold a
     # Gunicorn worker for several minutes. Try the configured model plus one fallback.
     models = list(dict.fromkeys([configured_model, *fallbacks, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]))[:2]
+    analysis_report = analysis_report or {}
+    missing_skills = analysis_report.get("missing_skills", [])[:12]
+    requirement_gaps = [
+        {"requirement": item.get("requirement", ""), "fit": item.get("fit", 0)}
+        for item in analysis_report.get("requirement_matches", [])
+        if item.get("fit", 0) < 45 and item.get("requirement")
+    ][:6]
     prompt = (
         "Rewrite the supplied resume as a complete, polished, ATS-readable resume tailored to the job description. "
         "Use only facts explicitly supported by the source resume. Never invent or infer names, contact details, employers, "
         "job titles, dates, education, skills, tools, certifications, responsibilities, achievements, metrics, or outcomes. "
         "Do not add a JD skill unless the source resume supports it. Preserve all factual details and numbers accurately. "
+        "Where the resume already proves a skill or responsibility using different wording, use the matching job-description wording "
+        "naturally in that same evidence-backed section so keyword matching can recognize it; do not add unsupported requirements. "
         "You may reorganize sections, improve grammar, remove repetition, and rewrite bullets clearly. Keep it concise and "
         "appropriate for the selected experience level. Return only the resume text, with clear section headings and no commentary, "
         "preface, markdown fences, placeholders, or claims that require user verification. If a section has no source evidence, omit it.\n\n"
         f"Selected experience level: {experience_level}\n\n"
+        f"ATS-estimate gaps to address only when supported by the source: missing skill labels={json.dumps(missing_skills)}; "
+        f"low-evidence JD requirements={json.dumps(requirement_gaps)}.\n\n"
         f"JOB DESCRIPTION:\n{job_description[:12000]}\n\n"
         f"SOURCE RESUME:\n{resume_text[:24000]}"
     )
@@ -613,7 +624,7 @@ def upload_resume(request):
             ai_resume_rewrite = None
             if final_score < 80:
                 ai_resume_rewrite = generate_gemini_resume_rewrite(
-                    resume_text, job_description_text, experience_level
+                    resume_text, job_description_text, experience_level, analysis_report
                 )
             matched_keywords = analysis_report["matched_skills"]
             missing_keywords = analysis_report["missing_skills"]
@@ -670,6 +681,15 @@ def upload_resume(request):
             if ai_resume_rewrite:
                 result["ai_resume_rewrite"] = ai_resume_rewrite["text"]
                 result["ai_resume_rewrite_model"] = ai_resume_rewrite["model"]
+                rewritten_skills = extract_skills(ai_resume_rewrite["text"])
+                rewritten_report = review_resume(
+                    ai_resume_rewrite["text"],
+                    job_description_text,
+                    experience_level=experience_level,
+                    resume_skills=rewritten_skills,
+                    job_skills=job_skills,
+                )
+                result["ai_resume_rewrite_score"] = rewritten_report["score"]
                 try:
                     result["ai_resume_rewrite_docx_base64"] = resume_text_to_docx_base64(ai_resume_rewrite["text"])
                 except Exception as docx_error:
