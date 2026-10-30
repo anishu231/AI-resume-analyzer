@@ -52,7 +52,9 @@ def generate_gemini_resume_rewrite(resume_text, job_description, experience_leve
         for value in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-2.5-flash-lite").split(",")
         if value.strip()
     ]
-    models = list(dict.fromkeys([configured_model, "gemini-3.8-flash", "gemini-3.5-flash-lite", *fallbacks, "gemini-2.5-flash-lite"]))
+    # Keep the synchronous upload request bounded: a slow model must not hold a
+    # Gunicorn worker for several minutes. Try the configured model plus one fallback.
+    models = list(dict.fromkeys([configured_model, *fallbacks, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]))[:2]
     prompt = (
         "Rewrite the supplied resume as a complete, polished, ATS-readable resume tailored to the job description. "
         "Use only facts explicitly supported by the source resume. Never invent or infer names, contact details, employers, "
@@ -67,13 +69,13 @@ def generate_gemini_resume_rewrite(resume_text, job_description, experience_leve
     )
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 6000},
+        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 4000},
     }
     for model in models:
         try:
             response = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={"x-goog-api-key": api_key}, json=payload, timeout=45,
+                headers={"x-goog-api-key": api_key}, json=payload, timeout=18,
             )
             response.raise_for_status()
             generated = "\n".join(
@@ -142,7 +144,8 @@ def add_gemini_bullet_suggestions(report, job_description):
         for value in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-2.5-flash-lite").split(",")
         if value.strip()
     ]
-    models = list(dict.fromkeys([configured_model, "gemini-3.8-flash", "gemini-3.5-flash-lite", *configured_fallbacks, "gemini-2.5-flash-lite"]))
+    # Bullet rewrites are optional feedback; bound retries so batch upload stays responsive.
+    models = list(dict.fromkeys([configured_model, *configured_fallbacks, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]))[:2]
     for candidate_model in models:
         pending = [item for item in targets if item["suggestion_source"] != "gemini"]
         if not pending:
@@ -162,7 +165,7 @@ def add_gemini_bullet_suggestions(report, job_description):
         try:
             response = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
-                headers={"x-goog-api-key": api_key}, json=payload, timeout=12,
+                headers={"x-goog-api-key": api_key}, json=payload, timeout=8,
             )
             response.raise_for_status()
             text = "".join(part.get("text", "") for part in response.json()["candidates"][0]["content"]["parts"])
