@@ -31,11 +31,94 @@ import os
 import traceback
 import json
 import requests
+import base64
+from io import BytesIO
 from datetime import timedelta
 from django.db import transaction
 from difflib import SequenceMatcher
 from .models import JobSearchQuota
 from .job_search import EXPERIENCE_LABELS, _location_matches, search_jobs
+
+
+def generate_gemini_resume_rewrite(resume_text, job_description, experience_level):
+    """Create a complete, JD-targeted resume using only facts in the source resume."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key or not resume_text.strip() or not job_description.strip():
+        return None
+
+    configured_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    fallbacks = [
+        value.strip()
+        for value in os.environ.get("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash-lite,gemini-2.5-flash-lite").split(",")
+        if value.strip()
+    ]
+    models = list(dict.fromkeys([configured_model, "gemini-3.8-flash", "gemini-3.5-flash-lite", *fallbacks, "gemini-2.5-flash-lite"]))
+    prompt = (
+        "Rewrite the supplied resume as a complete, polished, ATS-readable resume tailored to the job description. "
+        "Use only facts explicitly supported by the source resume. Never invent or infer names, contact details, employers, "
+        "job titles, dates, education, skills, tools, certifications, responsibilities, achievements, metrics, or outcomes. "
+        "Do not add a JD skill unless the source resume supports it. Preserve all factual details and numbers accurately. "
+        "You may reorganize sections, improve grammar, remove repetition, and rewrite bullets clearly. Keep it concise and "
+        "appropriate for the selected experience level. Return only the resume text, with clear section headings and no commentary, "
+        "preface, markdown fences, placeholders, or claims that require user verification. If a section has no source evidence, omit it.\n\n"
+        f"Selected experience level: {experience_level}\n\n"
+        f"JOB DESCRIPTION:\n{job_description[:12000]}\n\n"
+        f"SOURCE RESUME:\n{resume_text[:24000]}"
+    )
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 6000},
+    }
+    for model in models:
+        try:
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": api_key}, json=payload, timeout=45,
+            )
+            response.raise_for_status()
+            generated = "\n".join(
+                part.get("text", "")
+                for part in response.json()["candidates"][0]["content"]["parts"]
+                if part.get("text")
+            ).strip()
+            generated = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", generated, flags=re.IGNORECASE).strip()
+            if len(generated) < 80:
+                raise ValueError("Gemini returned an incomplete resume")
+            source_norm = re.sub(r"[^a-z0-9]+", "", resume_text.lower())
+            rewrite_norm = re.sub(r"[^a-z0-9]+", "", generated.lower())
+            if SequenceMatcher(None, source_norm[:12000], rewrite_norm[:12000]).ratio() > 0.97:
+                raise ValueError("Gemini returned an unchanged resume")
+            print(f"[GEMINI FULL RESUME] {model} generated a revised resume")
+            return {"text": generated, "model": model}
+        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            print(f"[GEMINI FULL RESUME] {model} failed (HTTP {status_code or 'request/parse error'}): {exc}")
+    return None
+
+
+def resume_text_to_docx_base64(resume_text):
+    """Format the generated plain-text resume as a downloadable DOCX in memory."""
+    from docx import Document
+
+    document = Document()
+    section_headings = {
+        "summary", "professional summary", "profile", "objective", "experience", "work experience",
+        "professional experience", "education", "skills", "technical skills", "projects", "certifications",
+        "certificates", "achievements", "awards", "publications", "languages",
+    }
+    for line in resume_text.splitlines():
+        clean = line.strip().lstrip("•*- ").strip()
+        if not clean:
+            continue
+        if clean.lower().rstrip(":") in section_headings:
+            document.add_heading(clean.rstrip(":"), level=2)
+        elif line.strip().startswith(("•", "-", "*")):
+            document.add_paragraph(clean, style="List Bullet")
+        else:
+            document.add_paragraph(clean)
+    output = BytesIO()
+    document.save(output)
+    return base64.b64encode(output.getvalue()).decode("ascii")
 
 
 def add_gemini_bullet_suggestions(report, job_description):
@@ -524,6 +607,11 @@ def upload_resume(request):
             )
             add_gemini_bullet_suggestions(analysis_report, job_description_text)
             final_score = analysis_report["score"]
+            ai_resume_rewrite = None
+            if final_score < 80:
+                ai_resume_rewrite = generate_gemini_resume_rewrite(
+                    resume_text, job_description_text, experience_level
+                )
             matched_keywords = analysis_report["matched_skills"]
             missing_keywords = analysis_report["missing_skills"]
             recommendations = analysis_report["recommendations"]
@@ -576,6 +664,13 @@ def upload_resume(request):
                 "resume_url": f"http://127.0.0.1:8000/media/{file_path}",
                 "scoring_method": "explainable_text_fit_v2"
             })
+            if ai_resume_rewrite:
+                result["ai_resume_rewrite"] = ai_resume_rewrite["text"]
+                result["ai_resume_rewrite_model"] = ai_resume_rewrite["model"]
+                try:
+                    result["ai_resume_rewrite_docx_base64"] = resume_text_to_docx_base64(ai_resume_rewrite["text"])
+                except Exception as docx_error:
+                    print(f"[GEMINI FULL RESUME] DOCX formatting failed: {docx_error}")
             
             print(f"[SUCCESS] {resume.name} - Score: {final_score}")
             

@@ -26,6 +26,24 @@ const isResume = (f: File) => f.type === "application/pdf" || /\.(pdf|docx)$/i.t
 const extOf = (name: string) => (name.split(".").pop() || "").toUpperCase();
 const sizeMB = (b: number) => `${(b / 1024 / 1024).toFixed(2)} MB`;
 
+const downloadRewrittenResume = (candidate: Candidate) => {
+  const content = candidate.ai_resume_rewrite_docx_base64;
+  if (!content) return;
+  const binary = window.atob(content);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const url = URL.createObjectURL(new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${String(candidate.name || "resume").replace(/\.[^.]+$/, "")}-AI-tailored.docx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
 const newSessionId = () =>
   `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -663,6 +681,29 @@ export default function UploadPage() {
                             </span>
                           </div>
                         </div>
+                        {score < 80 && c.ai_resume_rewrite && (
+                          <section className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 sm:p-5">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <h3 className="font-semibold text-emerald-950">AI-tailored resume draft</h3>
+                                <p className="mt-1 text-xs text-emerald-800">Generated with Gemini using your job description. Review every detail before applying.</p>
+                              </div>
+                              {c.ai_resume_rewrite_docx_base64 && (
+                                <button
+                                  type="button"
+                                  onClick={() => downloadRewrittenResume(c)}
+                                  className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 focus:outline-none focus-visible:ring-4 focus-visible:ring-emerald-200"
+                                >
+                                  Download revised resume
+                                </button>
+                              )}
+                            </div>
+                            <details className="mt-3">
+                              <summary className="cursor-pointer text-sm font-medium text-emerald-900">Preview revised resume</summary>
+                              <pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-lg bg-white p-4 font-sans text-sm leading-6 text-emerald-950 ring-1 ring-emerald-100">{c.ai_resume_rewrite}</pre>
+                            </details>
+                          </section>
+                        )}
                         <ResumeFeedback report={c.match_report} />
                       </li>
                     );
