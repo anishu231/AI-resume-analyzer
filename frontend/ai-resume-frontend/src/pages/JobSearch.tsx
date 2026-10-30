@@ -15,7 +15,7 @@ type Job = {
   level: string;
   level_specified?: boolean;
   role_relevance?: number;
-  source?: "greenhouse" | "lever" | "adzuna" | "jooble";
+  source?: "greenhouse" | "lever" | "adzuna" | "jooble" | "accenture";
   source_title?: string;
   resume_match?: {
     score: number | null;
@@ -177,7 +177,7 @@ export default function JobSearch() {
                       <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-emerald-700"><Building2 size={14} />{job.company}</p>
                       <h3 className="mt-2 text-lg font-bold leading-6 text-slate-900">{job.title}</h3>
                     </div>
-                    {job.source === "greenhouse" || job.source === "lever" || job.source_title ? (
+                    {job.source === "greenhouse" || job.source === "lever" || job.source === "accenture" || job.source_title ? (
                       <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">Company career page</span>
                     ) : job.source === "adzuna" ? (
                       <a href="https://www.adzuna.in/" target="_blank" rel="noopener noreferrer" aria-label="Jobs by Adzuna" className="inline-flex h-[23px] min-w-[116px] shrink-0 items-center justify-center gap-1 rounded-full bg-slate-100 px-2 text-[10px] font-semibold text-slate-700"><span>Jobs by</span><img src="https://zunastatic-abf.kxcdn.com/images/global/adzuna_logo.svg" alt="Adzuna" className="h-[17px] w-[58px] object-contain" /></a>

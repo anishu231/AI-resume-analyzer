@@ -39,17 +39,18 @@ Hugging Face container disk is temporary. If the current Space is using its loca
 
 ## Job Search providers
 
-The signed-in Job Search page reads jobs from public Greenhouse and Lever boards plus the Adzuna India and Jooble India APIs. Results are normalized and cached for 30 minutes. Users can search as needed; provider-level usage caps remain enabled. A failure from one provider is logged without stopping results from the others.
+The signed-in Job Search page reads jobs from public Greenhouse and Lever boards, Accenture's official India career pages discovered through Gemini Google Search grounding, and the Adzuna India and Jooble India APIs. Results are normalized, limited to dated postings from the last 15 days, and cached for 30 minutes. A failure from one provider does not stop results from the others.
 
 ### Configure credentials
 
 1. Copy `.env.example` to `.env` for local development. Keep real values out of Git.
 2. Register at [Adzuna Developer](https://developer.adzuna.com/) and set `ADZUNA_APP_ID` and `ADZUNA_APP_KEY`. The app labels Adzuna results and links the attribution to Adzuna. Adzuna's free key is for evaluation; check its current terms and obtain written permission/license before ongoing commercial use.
 3. Request an India-region API key from [Jooble India API](https://in.jooble.org/api/about) and set `JOOBLE_KEY`. Jooble currently documents a 500-request lifetime free limit per key; the key is region-specific.
+Accenture career discovery also needs `JOB_SEARCH_GEMINI_API_KEY` configured as a backend/Hugging Face secret. Only cited Accenture job-detail pages with a verifiable posting date in the last 15 days are accepted. `JOB_SEARCH_GEMINI_MODEL` is optional and defaults to `gemini-3.8-flash`.
 4. Add Greenhouse or Lever public boards to `analyzer/companies.json` as `{ "name": "Company", "ats": "greenhouse", "token": "board-token" }` or `{ "name": "Company", "ats": "lever", "token": "site-slug" }`. These are public board identifiers, not secrets. Keep this allowlist to the public companies the app should search. Adzuna and Jooble aggregator results are not restricted to these board entries. Greenhouse and Lever published-board GET endpoints do not require API credentials.
 5. On Hugging Face, add `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, and `JOOBLE_KEY` under **Settings → Variables and secrets → Secrets**, then restart the Space. Never put provider secrets in frontend code.
 
-The backend has conservative credential-level call caps: 200 Adzuna API calls per UTC day and 450 lifetime Jooble calls per key by default. The caps can be changed with `ADZUNA_DAILY_JOB_SEARCH_LIMIT` and `JOOBLE_LIFETIME_JOB_SEARCH_LIMIT` only when the provider account's plan permits it. Counters are stored in the app database, so mount persistent storage or configure persistent PostgreSQL to retain them across Space rebuilds.
+The backend has conservative credential-level call caps: 200 Adzuna API calls per UTC day, 450 lifetime Jooble calls per key, and 100 Gemini API requests per UTC day by default. The caps can be changed with `ADZUNA_DAILY_JOB_SEARCH_LIMIT`, `JOOBLE_LIFETIME_JOB_SEARCH_LIMIT`, and `GOOGLE_SEARCH_DAILY_JOB_SEARCH_LIMIT` only when provider quotas permit it. Counters are stored in the app database, so mount persistent storage or configure persistent PostgreSQL to retain them across Space rebuilds.
 
 ### Run locally
 

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone as datetime_timezone
 from difflib import SequenceMatcher
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from django.core.cache import cache
@@ -254,7 +255,7 @@ def _job(title, company, location, url, posted, source, description=""):
 def _safe_error(exc):
     """Provider error text must never leak keys embedded in request URLs."""
     detail = str(exc)
-    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY"):
+    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY", "JOB_SEARCH_GEMINI_API_KEY"):
         secret = os.environ.get(name, "").strip()
         if secret:
             detail = detail.replace(secret, "[redacted]")
@@ -267,7 +268,7 @@ def _safe_error(exc):
                 detail += ": " + str(provider_message)[:180]
         except (ValueError, AttributeError):
             pass
-    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY"):
+    for name in ("ADZUNA_APP_ID", "ADZUNA_APP_KEY", "JOOBLE_KEY", "JOB_SEARCH_GEMINI_API_KEY"):
         secret = os.environ.get(name, "").strip()
         if secret:
             detail = detail.replace(secret, "[redacted]")
@@ -331,6 +332,75 @@ def _jooble(role, level, location):
     return [job for item in response.json().get("jobs", []) if (job := _job(item.get("title"), item.get("company"), item.get("location"), item.get("link"), item.get("updated"), "jooble", item.get("snippet"))) and _level_matches(level, job["title"], job["_description"]) and _location_matches(location, job["location"]) and _role_matches(role, job["title"], job["_description"])]
 
 
+def _accenture(role, level, location):
+    """Discover recent Accenture jobs, accepting only cited official job pages."""
+    api_key = os.environ.get("JOB_SEARCH_GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Google-grounded company search is not configured.")
+    day = datetime.now(datetime_timezone.utc).date().isoformat()
+    _reserve_provider_call(
+        "google_search", api_key, day,
+        "GOOGLE_SEARCH_DAILY_JOB_SEARCH_LIMIT", 100,
+    )
+    prompt = (
+        "Find current OPEN job vacancies only on Accenture's official India careers website. "
+        "Search for target role " + json.dumps(role) + ", location " + json.dumps(location or "India") +
+        ", experience level " + json.dumps(EXPERIENCE_LABELS.get(level, level)) + ". "
+        "Return only a JSON array (no markdown), at most 10 objects with keys title, location, posted_date, url. "
+        "Use ISO YYYY-MM-DD for posted_date only when an official Accenture page or search snippet gives a clear posting date. "
+        "Include only jobs posted within the last 15 days. Do not use other companies, aggregators, job boards, or generic search pages. "
+        "Do not invent jobs, dates, titles, locations, or URLs. Every url must be a specific Accenture job-detail page."
+    )
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json={"model": os.environ.get("JOB_SEARCH_GEMINI_MODEL", "gemini-3.8-flash"), "input": prompt, "tools": [{"type": "google_search"}]},
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    output_text, cited_urls = [], set()
+    for step in payload.get("steps", []):
+        if step.get("type") != "model_output":
+            continue
+        for block in step.get("content", []):
+            if block.get("type") != "text":
+                continue
+            output_text.append(block.get("text", ""))
+            for annotation in block.get("annotations", []):
+                url = annotation.get("url", "")
+                if url:
+                    cited_urls.add(url)
+
+    text = "\n".join(output_text).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end < start:
+        return []
+    try:
+        items = json.loads(text[start:end + 1])
+    except (ValueError, TypeError):
+        print("[JOB SEARCH] Accenture search returned an unreadable result")
+        return []
+
+    jobs = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url", "")).strip()
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if (host != "accenture.com" and not host.endswith(".accenture.com")) or url not in cited_urls:
+            continue
+        if "/careers/jobdetails" not in parsed.path.lower():
+            continue
+        job = _job(item.get("title"), "Accenture", item.get("location"), url, item.get("posted_date"), "accenture")
+        india_search = not _provider_location(location)
+        location_ok = india_search or _location_matches(location, job["location"] if job else "")
+        if job and _posted_within_days(job["posted"]) and _level_matches(level, job["title"]) and location_ok and _role_matches(role, job["title"]):
+            jobs.append(job)
+    return jobs
+
+
 def _fetch_all(role, level, location):
     companies = _companies()
     jobs, errors = [], []
@@ -344,6 +414,8 @@ def _fetch_all(role, level, location):
         ("Adzuna", lambda: _adzuna(role, level, location)),
         ("Jooble", lambda: _jooble(role, level, location)),
     ])
+    if os.environ.get("JOB_SEARCH_GEMINI_API_KEY", "").strip():
+        tasks.append(("Accenture careers", lambda: _accenture(role, level, location)))
     with ThreadPoolExecutor(max_workers=min(12, max(1, len(tasks)))) as pool:
         futures = {pool.submit(fn): source for source, fn in tasks}
         for future in as_completed(futures):
