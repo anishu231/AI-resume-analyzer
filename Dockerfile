@@ -41,4 +41,4 @@ COPY --from=frontend-build /frontend/dist /app/frontend-build
 
 EXPOSE 7860
 
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn ats_checker.wsgi:application --bind 0.0.0.0:7860"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn ats_checker.wsgi:application --bind 0.0.0.0:7860 --timeout 120"]
