@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "react-toastify";
+import { clearAuthSession } from "../services/auth";
 import {
   BarChart,
   Bar,
@@ -102,6 +103,7 @@ export default function Dashboard() {
       const token = localStorage.getItem("access");
       const res = await fetch(`${API}/dashboard/`, { headers: { Authorization: `Bearer ${token}` } });
       if (res.status === 401) {
+        clearAuthSession();
         setError({ msg: "Your session has expired. Please log in again.", expired: true });
         return;
       }

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { FileSearch, LogOut, Menu, X } from "lucide-react";
+import { addAuthExpiredListener, clearAuthSession, getActiveAccessToken } from "../services/auth";
 
 const LINKS = [
   { to: "/", label: "Home", end: true },
@@ -14,9 +15,10 @@ const LINKS = [
 
 const readAuth = () => {
   try {
+    const token = getActiveAccessToken();
     return {
-      loggedIn: !!localStorage.getItem("access"),
-      username: localStorage.getItem("username") || "",
+      loggedIn: !!token,
+      username: token ? localStorage.getItem("username") || "" : "",
     };
   } catch {
     return { loggedIn: false, username: "" };
@@ -39,15 +41,15 @@ export default function Navbar() {
   useEffect(() => {
     const sync = () => setAuth(readAuth());
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    const removeExpiredListener = addAuthExpiredListener(sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      removeExpiredListener();
+    };
   }, []);
 
   const handleLogout = () => {
-    try {
-      localStorage.clear();
-    } catch {
-      /* ignore */
-    }
+    clearAuthSession();
     setAuth({ loggedIn: false, username: "" });
     setMenuOpen(false);
     navigate("/");

@@ -1,6 +1,7 @@
 // src/pages/Profile.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { clearAuthSession } from "../services/auth";
 import {
   User,
   Mail,
@@ -85,6 +86,7 @@ export default function Profile() {
           signal: controller.signal,
         });
         if (res.status === 401) {
+          clearAuthSession();
           setActivity({
             status: "error",
             expired: true,
@@ -125,11 +127,7 @@ export default function Profile() {
   }, [activity]);
 
   const handleLogout = () => {
-    try {
-      localStorage.clear();
-    } catch {
-      /* ignore */
-    }
+    clearAuthSession();
     navigate("/");
   };
 

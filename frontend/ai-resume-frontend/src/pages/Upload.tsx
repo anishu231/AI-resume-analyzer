@@ -1,6 +1,7 @@
 // src/pages/Upload.tsx
 import { useState, useCallback, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { clearAuthSession } from "../services/auth";
 import {
   Upload,
   FileText,
@@ -172,6 +173,7 @@ export default function UploadPage() {
       });
 
       if (response.status === 401) {
+        clearAuthSession();
         setExpired(true);
         throw new Error("Your session has expired. Please log in again.");
       }
