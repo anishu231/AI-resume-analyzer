@@ -53,7 +53,6 @@ export default function JobSearch() {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
-  const [sourceErrors, setSourceErrors] = useState<string[]>([]);
   const [hasResume, setHasResume] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
 
@@ -77,7 +76,6 @@ export default function JobSearch() {
 
   const applySearchState = (data: SearchState) => {
     setJobs(data.jobs || []);
-    setSourceErrors(data.source_errors || []);
     setHasResume(Boolean(data.has_resume));
     setLastSearchAt(data.last_search_at);
     if (data.role) setRole(data.role);
@@ -158,13 +156,12 @@ export default function JobSearch() {
           <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="text-xl font-bold text-slate-950">Company career listings</h2>
-              <p className="mt-1 text-sm text-slate-600">{jobs.length ? `${jobs.length} result${jobs.length === 1 ? "" : "s"} from company pages and labeled job sources` : "Company career pages and labeled job sources are searched."}</p>
+              <p className="mt-1 text-sm text-slate-600">{jobs.length ? `${jobs.length} matching job listing${jobs.length === 1 ? "" : "s"}` : "Search listings matched to your role, experience level, and location."}</p>
             </div>
             {lastSearchAt && <span className="text-xs text-slate-500">Search saved {new Date(lastSearchAt).toLocaleString()}</span>}
           </div>
 
           {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</p>}
-          {sourceErrors.length > 0 && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">Some job sources did not respond ({sourceErrors.join(", ")}); results from available sources are shown.</p>}
           {jobs.length > 0 && !hasResume && (
             <p className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
               Upload a resume to see which listed job skills match your profile. <Link to="/upload" className="font-semibold underline">Upload resume</Link>
@@ -185,7 +182,7 @@ export default function JobSearch() {
                     ) : job.source === "adzuna" ? (
                       <a href="https://www.adzuna.in/" target="_blank" rel="noopener noreferrer" aria-label="Jobs by Adzuna" className="inline-flex h-[23px] min-w-[116px] shrink-0 items-center justify-center gap-1 rounded-full bg-slate-100 px-2 text-[10px] font-semibold text-slate-700"><span>Jobs by</span><img src="https://zunastatic-abf.kxcdn.com/images/global/adzuna_logo.svg" alt="Adzuna" className="h-[17px] w-[58px] object-contain" /></a>
                     ) : (
-                      <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">via Jooble</span>
+                      <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">Job listing</span>
                     )}
                   </div>
                   <p className="mt-3 flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={15} />{job.location || "Location not specified"}</p>
